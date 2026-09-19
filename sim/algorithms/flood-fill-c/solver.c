@@ -173,14 +173,27 @@ struct Coordinate squareToCoord(int square) {
     return coord;
 }
 
+/*
+Prepares distances[][] for a fresh BFS: wipes it, then "plants" the seed(s)
+the BFS will grow outward from. -1 means "not yet reached by the BFS" (not
+"there's no path" — just "we haven't computed it yet"). The actual BFS that
+fills in the rest of the grid happens in updateDistances(), right after this
+runs.
+*/
 void resetDistances() {
-    // initially sets all the distances to -1 (invalid distance)
+    // -1 = unvisited/unknown distance, for every cell
     for (int x = 0; x < mazeWidth; ++x) {
         for (int y = 0; y < mazeHeight; ++y) {
             distances[x][y] = -1;
         }
     }
 
+    // The seed is distance 0 at the goal cell(s) — the BFS below spreads
+    // outward from here, so "distance" ends up meaning "shortest known
+    // distance TO the goal", even though the search itself runs backwards
+    // (goal -> everywhere), which is exactly what makes the algorithm both
+    // fast (one BFS covers the whole maze) and cheap to re-run every step.
+    //
     // if you haven't reached the center, set the goal to be the center
     // (same rule the simulator itself uses: 1 cell if both dimensions are
     // odd, 2 cells if exactly one is even, 4 cells if both are even)
@@ -206,33 +219,64 @@ void resetDistances() {
     }
 }
 
+/*
+Decodes the 4-bit wall value stored in maze[x][y] (see the _0000.._1111
+macros in solver.h — bit order is North-East-South-West, MSB first) and
+answers one yes/no question: "is there a wall between this cell and its
+neighbor in `direction`?" Used everywhere the BFS/decision logic needs to
+know if it's allowed to step from one cell into the next.
+*/
 int isWallInDirection(int x, int y, Heading direction) {
     switch (direction) {
         case NORTH:
+            // north bit is the most significant bit (value 8) — set whenever
+            // the stored value is 8 or more, regardless of the other 3 bits
             if (maze[x][y] >= 8)
                 return 1;
             break;
         case EAST:
+            // east bit (value 4) — isolate it with %8 (drop the north bit),
+            // then check if what's left is 4 or more (i.e. the east bit is set)
             if (maze[x][y] % 8 >= 4)
                 return 1;
             break;
         case SOUTH:
+            // south bit (value 2) — same idea, %4 drops north+east
             if (maze[x][y] % 4 >= 2)
                 return 1;
             break;
         case WEST:
-            if (maze[x][y] % 2 == 1) 
+            // west bit (value 1) — the least significant bit, so plain parity
+            if (maze[x][y] % 2 == 1)
                 return 1;
             break;
     }
     return 0;
 }
 
+/*
+This is the actual "flood fill" step: a breadth-first search (BFS) that
+starts at the goal cell(s) (distance 0, seeded by resetDistances()) and
+spreads outward one ring of cells at a time through every currently-known
+OPEN passage, labeling each newly-reached cell with its distance from the
+goal. BFS visits cells in strictly increasing distance order, so the very
+first time a cell is reached is guaranteed to be via the shortest possible
+path — that's what makes plain "distance + 1 from a neighbor" correct here,
+no need to ever revisit/improve a cell once it has a distance.
+
+Cells behind walls we haven't discovered yet simply never get reached, so
+they stay at -1 ("unknown distance") — which is fine, since the mouse can
+only act on what it currently knows anyway. This whole function re-runs
+from scratch every single step (see solver()), which is cheap enough for a
+16x16-ish grid and means the "map" is always fully up to date with the very
+latest wall the mouse just saw.
+*/
 void updateDistances() {
     resetDistances();
     queue squares = queue_create();
 
-    // adds the goal squares to the queue (the middle of the maze or the starting position depending on if you've reached the center)
+    // seed the BFS: push every goal cell (the ones resetDistances() just
+    // set to distance 0) onto the queue as the starting points
     for (int x = 0; x < mazeWidth; ++x) {
         for (int y = 0; y < mazeHeight; ++y) {
             if (distances[x][y] == 0)
@@ -240,6 +284,10 @@ void updateDistances() {
         }
     }
 
+    // standard BFS: pop the next cell, try to spread to each of its 4
+    // neighbors. A neighbor is only spread to if (a) there's no wall in the
+    // way, and (b) it doesn't already have a distance (distances == -1) —
+    // that second check is what stops the BFS from ever revisiting a cell.
     while (!queue_is_empty(squares)) {
         struct Coordinate square = squareToCoord(queue_pop(squares));
         int x = square.x;
@@ -247,8 +295,8 @@ void updateDistances() {
 
         // if there's no wall to the north && the square to the north hasn't been checked yet
         if (isWallInDirection(x, y, NORTH) == 0 && distances[x][y + 1] == -1) {
-            distances[x][y + 1] = distances[x][y] + 1;
-            queue_push(squares, xyToSquare(x, y + 1));
+            distances[x][y + 1] = distances[x][y] + 1;   // one step further than here
+            queue_push(squares, xyToSquare(x, y + 1));   // and now spread from it too
         }
         // same as ^ but for east
         if (isWallInDirection(x, y, EAST) == 0 && distances[x + 1][y] == -1) {
@@ -445,9 +493,24 @@ Action solver() {
     return action;
 }
 
-// Put your implementation of floodfill here!
+/*
+Despite the name, this function isn't the BFS itself (that's
+updateDistances(), above) — by the time this runs, distances[][] is already
+a fully up-to-date map of "shortest known distance to goal" for every cell.
+All this function does is look at the (up to) 3 cells the mouse could step
+into right now — front, right, left, relative to its CURRENT heading — and
+pick whichever one has the smallest distance. That's the whole strategy:
+always greedily move toward the neighbor closest to the goal.
+
+Why 4 separate heading blocks that look almost identical? distances[][] is
+indexed by absolute compass direction (north/east/south/west), but "front/
+right/left" are relative to whichever way the mouse is currently facing.
+E.g. when heading == EAST, "front" means checking the EAST neighbor, "right"
+means SOUTH, "left" means NORTH — the block below just hardcodes that
+rotation for each of the 4 possible headings.
+*/
 Action floodFill() {
-    unsigned int least_distance = 300;   // just some large number, none of the distances will be over 300
+    unsigned int least_distance = 300;   // sentinel "infinity" — no real distance in this maze gets anywhere close to 300
     Action optimal_move = IDLE;
     isDeadEndTurn = 0;
 
@@ -459,6 +522,11 @@ Action floodFill() {
     */
 
     if (heading == NORTH) {
+        // each check: "is this direction open, AND is its distance strictly
+        // better than the best found so far?" — if so, take it as the new
+        // best. Front is checked first, so on a tie (equal distances) the
+        // mouse prefers going straight over turning, since a later check
+        // needs to be STRICTLY smaller (<) to overwrite an earlier pick.
         if (!isWallInDirection(position.x, position.y, NORTH) && distances[position.x][position.y + 1] < least_distance) {
             least_distance = distances[position.x][position.y + 1];
             optimal_move = FORWARD;
@@ -516,6 +584,11 @@ Action floodFill() {
     }
 
     // handles dead ends (when there's no walls in front, to the right or to the left)
+    // least_distance never got updated from its sentinel value, meaning
+    // NONE of the 3 checks above found an open+improving neighbor — so the
+    // mouse is boxed in on 3 sides. There's no "best direction" to compute
+    // here, so it just turns (arbitrarily right) and lets next step's
+    // updateMaze()/floodFill() re-evaluate from the new heading.
     if (least_distance == 300) {
         optimal_move = RIGHT;   // arbitrary, can be any turn
         isDeadEndTurn = 1;
