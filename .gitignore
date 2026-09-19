@@ -1,0 +1,10 @@
+# Vendor/reference material — downloaded or cloned, not project work.
+# Can always be re-fetched (see micromouse/CLAUDE.md or sim/ for sources).
+sim/mms-app/
+sim/mms-src/
+sim/mazes/
+
+# Build artifacts
+*.exe
+*.o
+*.obj
