@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include "solver.h"
 #include "API.h"
 #include "queue.h"
@@ -10,6 +12,17 @@ int mazeWidth;
 int mazeHeight;
 
 int reached_center = 0;     // "boolean" that stores whether the mouse should start exploring more squares
+
+// last sensor reading, relative to the mouse's current heading (updated by
+// updateMaze() each step, used by solver() to build the run-output log line)
+int lastFront;
+int lastLeft;
+int lastRight;
+
+// set by floodFill() when it fell back to an arbitrary turn because no
+// neighboring cell had a smaller distance (i.e. a dead end) — used to
+// label that case "Turn-Around" instead of "Right" in the log line
+int isDeadEndTurn = 0;
 
 void initialize() {
     mazeWidth = API_mazeWidth();
@@ -45,74 +58,80 @@ Updates the maze's walls based on what the mouse can currently see
 void updateMaze() {
     int x = position.x;
     int y = position.y;
-    // start by assuming there are no walls, this variable will be changed based on which walls you see 
+    // start by assuming there are no walls, this variable will be changed based on which walls you see
     unsigned int walls = _0000;
+
+    // read each sensor exactly once per step; stored in globals so solver()
+    // can include them in the run-output log line after deciding an action
+    int front = lastFront = API_wallFront();
+    int left = lastLeft = API_wallLeft();
+    int right = lastRight = API_wallRight();
 
     switch (heading) {
         case NORTH:
-            if (API_wallFront()) {
+            if (front) {
                 walls |= _1000; // stores the wall to the north in walls (to be updated at the end of switch statement)
                 // updating neighboring squares as well (if there is one):
                 if (y + 1 != mazeHeight)
                     maze[x][y + 1] |= _0010;
             }
-            if (API_wallLeft()) {
+            if (left) {
                 walls |= _0001;
                 if (x - 1 >= 0)
                     maze[x - 1][y] |= _0100;
             }
-            if (API_wallRight()) {
+            if (right) {
                 walls |= _0100;
                 if (x + 1 != mazeWidth)
                     maze[x + 1][y] |= _0001;
             }
             break;
         case EAST:
-            if (API_wallFront()) {
+            if (front) {
                 walls |= _0100;
                 if (x + 1 != mazeWidth)
                     maze[x + 1][y] |= _0001;
             }
-            if (API_wallLeft()) {
+            if (left) {
                 walls |= _1000;
                 if (y + 1 != mazeHeight)
                     maze[x][y + 1] |= _0010;
             }
-            if (API_wallRight()) {
+            if (right) {
                 walls |= _0010;
                 if (y - 1 >= 0)
                     maze[x][y - 1] |= _1000;
             }
             break;
         case SOUTH:
-            if (API_wallFront()) {
+            if (front) {
                 walls |= _0010;
                 if (y - 1 >= 0)
                     maze[x][y - 1] |= _1000;
             }
-            if (API_wallLeft()) {
+            if (left) {
                 walls |= _0100;
                 if (x + 1 != mazeWidth)
                     maze[x + 1][y] |= _0001;
             }
-            if (API_wallRight()) {
+            if (right) {
                 walls |= _0001;
                 if (x - 1 >= 0)
                     maze[x - 1][y] |= _0100;
             }
             break;
         case WEST:
-            if (API_wallFront()) {
+            if (front) {
                 walls |= _0001;
                 if (x - 1 >= 0)
                     maze[x - 1][y] |= _0100;
             }
-            if (API_wallLeft()) {
+            if (left) {
                 walls |= _0010;
                 if (y - 1 >= 0)
                     maze[x][y - 1] |= _1000;
             }
-            if (API_wallRight()) {
+            if (right) {
                 walls |= _1000;
                 if (y + 1 != mazeHeight)
                     maze[x][y + 1] |= _0010;
@@ -370,24 +389,59 @@ void showPath() {
 }
 
 Action solver() {
+    int goalChanged = 0;
+
     // if you reached the center, go back to the start
     if (!reached_center && distances[position.x][position.y] == 0) {
         reached_center = 1;
+        goalChanged = 1;
     }
     // if you went to the center & all the way back to the start, restart
     else if (reached_center && distances[position.x][position.y] == 0) {
         reached_center = 0;
+        goalChanged = 1;
     }
+
+    // distance-to-goal as known BEFORE this step's sensor reading, so we
+    // can tell whether a newly-discovered wall just blocked the planned
+    // route (distance getting worse) versus the goal itself just changing
+    int distanceBefore = distances[position.x][position.y];
 
     updateMaze();
     updateDistances();
     showPath();
 
+    char rerouteField[24];
+    if (!goalChanged && distanceBefore >= 0 &&
+        distances[position.x][position.y] > distanceBefore) {
+        snprintf(rerouteField, sizeof(rerouteField), "%d->%d",
+                 distanceBefore, distances[position.x][position.y]);
+    } else {
+        rerouteField[0] = '\0';
+    }
+
     Action action = floodFill();
 
     updateHeading(action);
     updatePosition(action);
-    debug_coord(position.x, position.y);
+
+    const char *actionLabel;
+    switch (action) {
+        case FORWARD: actionLabel = "Forward"; break;
+        case LEFT:     actionLabel = "Left"; break;
+        case RIGHT:    actionLabel = isDeadEndTurn ? "Turn-Around" : "Right"; break;
+        default:       actionLabel = "Idle"; break;
+    }
+
+    char logLine[128];
+    snprintf(logLine, sizeof(logLine),
+             "F:%s R:%s L:%s\tACTION: %s\tMOVE-TO: [%d,%d]\tREROUTE: %s",
+             lastFront ? "wall" : "open",
+             lastRight ? "wall" : "open",
+             lastLeft ? "wall" : "open",
+             actionLabel, position.x, position.y, rerouteField);
+    debug_log(logLine);
+
     return action;
 }
 
@@ -395,6 +449,7 @@ Action solver() {
 Action floodFill() {
     unsigned int least_distance = 300;   // just some large number, none of the distances will be over 300
     Action optimal_move = IDLE;
+    isDeadEndTurn = 0;
 
     /*
     Basic Idea:
@@ -461,8 +516,10 @@ Action floodFill() {
     }
 
     // handles dead ends (when there's no walls in front, to the right or to the left)
-    if (least_distance == 300)
+    if (least_distance == 300) {
         optimal_move = RIGHT;   // arbitrary, can be any turn
+        isDeadEndTurn = 1;
+    }
     
     return optimal_move;
 }
