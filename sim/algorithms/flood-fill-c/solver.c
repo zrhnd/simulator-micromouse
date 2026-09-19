@@ -2,25 +2,33 @@
 #include "API.h"
 #include "queue.h"
 
-unsigned int maze[MAZE_SIZE][MAZE_SIZE] = { 0 };
-int distances[MAZE_SIZE][MAZE_SIZE] = { -1 };   // 1000 if it hasn't been visited yet
+unsigned int maze[MAZE_MAX_SIZE][MAZE_MAX_SIZE] = { 0 };
+int distances[MAZE_MAX_SIZE][MAZE_MAX_SIZE] = { -1 };   // 1000 if it hasn't been visited yet
 struct Coordinate position;
 Heading heading;
+int mazeWidth;
+int mazeHeight;
 
 int reached_center = 0;     // "boolean" that stores whether the mouse should start exploring more squares
 
 void initialize() {
-    // setting the borders
-    for (int i = 1; i < MAZE_SIZE - 1; ++i) {
-        maze[0][i] = _0001;
-        maze[i][0] = _0010;
-        maze[i][MAZE_SIZE - 1] = _1000;
-        maze[MAZE_SIZE - 1][i] = _0100;
+    mazeWidth = API_mazeWidth();
+    mazeHeight = API_mazeHeight();
+
+    // setting the west/east borders, one cell per row (excludes corners)
+    for (int y = 1; y < mazeHeight - 1; ++y) {
+        maze[0][y] = _0001;
+        maze[mazeWidth - 1][y] = _0100;
+    }
+    // setting the south/north borders, one cell per column (excludes corners)
+    for (int x = 1; x < mazeWidth - 1; ++x) {
+        maze[x][0] = _0010;
+        maze[x][mazeHeight - 1] = _1000;
     }
     maze[0][0] = _0011;
-    maze[0][MAZE_SIZE - 1] = _1001;
-    maze[MAZE_SIZE - 1][0] = _0110;
-    maze[MAZE_SIZE - 1][MAZE_SIZE - 1] = _1100;
+    maze[0][mazeHeight - 1] = _1001;
+    maze[mazeWidth - 1][0] = _0110;
+    maze[mazeWidth - 1][mazeHeight - 1] = _1100;
 
     // setting initial distances
     resetDistances();
@@ -45,7 +53,7 @@ void updateMaze() {
             if (API_wallFront()) {
                 walls |= _1000; // stores the wall to the north in walls (to be updated at the end of switch statement)
                 // updating neighboring squares as well (if there is one):
-                if (y + 1 != MAZE_SIZE)
+                if (y + 1 != mazeHeight)
                     maze[x][y + 1] |= _0010;
             }
             if (API_wallLeft()) {
@@ -55,19 +63,19 @@ void updateMaze() {
             }
             if (API_wallRight()) {
                 walls |= _0100;
-                if (x + 1 != MAZE_SIZE)
+                if (x + 1 != mazeWidth)
                     maze[x + 1][y] |= _0001;
             }
             break;
         case EAST:
             if (API_wallFront()) {
                 walls |= _0100;
-                if (x + 1 != MAZE_SIZE)
+                if (x + 1 != mazeWidth)
                     maze[x + 1][y] |= _0001;
             }
             if (API_wallLeft()) {
                 walls |= _1000;
-                if (y + 1 != MAZE_SIZE)
+                if (y + 1 != mazeHeight)
                     maze[x][y + 1] |= _0010;
             }
             if (API_wallRight()) {
@@ -84,7 +92,7 @@ void updateMaze() {
             }
             if (API_wallLeft()) {
                 walls |= _0100;
-                if (x + 1 != MAZE_SIZE)
+                if (x + 1 != mazeWidth)
                     maze[x + 1][y] |= _0001;
             }
             if (API_wallRight()) {
@@ -106,7 +114,7 @@ void updateMaze() {
             }
             if (API_wallRight()) {
                 walls |= _1000;
-                if (y + 1 != MAZE_SIZE)
+                if (y + 1 != mazeHeight)
                     maze[x][y + 1] |= _0010;
             }
             break;
@@ -136,35 +144,42 @@ void updateMaze() {
 }
 
 int xyToSquare(int x, int y) {
-    return x + MAZE_SIZE * y;
+    return x + mazeWidth * y;
 }
 
 struct Coordinate squareToCoord(int square) {
     struct Coordinate coord;
-    coord.x = square % MAZE_SIZE;
-    coord.y = square / MAZE_SIZE;
+    coord.x = square % mazeWidth;
+    coord.y = square / mazeWidth;
     return coord;
 }
 
 void resetDistances() {
     // initially sets all the distances to -1 (invalid distance)
-    for (int x = 0; x < MAZE_SIZE; ++x) {
-        for (int y = 0; y < MAZE_SIZE; ++y) {
+    for (int x = 0; x < mazeWidth; ++x) {
+        for (int y = 0; y < mazeHeight; ++y) {
             distances[x][y] = -1;
         }
     }
 
     // if you haven't reached the center, set the goal to be the center
+    // (same rule the simulator itself uses: 1 cell if both dimensions are
+    // odd, 2 cells if exactly one is even, 4 cells if both are even)
     if (!reached_center) {
-        // sets goal distances
-        if (MAZE_SIZE % 2 == 0) {
-            distances[MAZE_SIZE/2][MAZE_SIZE/2] = 0; 
-            distances[MAZE_SIZE/2 - 1][MAZE_SIZE/2] = 0; 
-            distances[MAZE_SIZE/2][MAZE_SIZE/2 - 1] = 0; 
-            distances[MAZE_SIZE/2 - 1][MAZE_SIZE/2 - 1] = 0; 
+        int ax = (mazeWidth - 1) / 2, ay = (mazeHeight - 1) / 2;
+        int bx = mazeWidth / 2,       by = (mazeHeight - 1) / 2;
+        int cx = (mazeWidth - 1) / 2, cy = mazeHeight / 2;
+        int dx = mazeWidth / 2,       dy = mazeHeight / 2;
+
+        distances[ax][ay] = 0;
+        if (mazeWidth % 2 == 0) {
+            distances[bx][by] = 0;
         }
-        else {
-            distances[MAZE_SIZE/2][MAZE_SIZE/2] = 0; 
+        if (mazeHeight % 2 == 0) {
+            distances[cx][cy] = 0;
+        }
+        if (mazeWidth % 2 == 0 && mazeHeight % 2 == 0) {
+            distances[dx][dy] = 0;
         }
     }
     else {
@@ -199,8 +214,8 @@ void updateDistances() {
     queue squares = queue_create();
 
     // adds the goal squares to the queue (the middle of the maze or the starting position depending on if you've reached the center)
-    for (int x = 0; x < MAZE_SIZE; ++x) {
-        for (int y = 0; y < MAZE_SIZE; ++y) {
+    for (int x = 0; x < mazeWidth; ++x) {
+        for (int y = 0; y < mazeHeight; ++y) {
             if (distances[x][y] == 0)
                 queue_push(squares, xyToSquare(x, y));
         }
@@ -311,20 +326,20 @@ void showPath() {
     int y = position.y;
     int steps = 0;
 
-    while (distances[x][y] != 0 && steps < MAZE_SIZE * MAZE_SIZE) {
+    while (distances[x][y] != 0 && steps < mazeWidth * mazeHeight) {
         API_setColor(x, y, 'Y');
 
         int best_distance = distances[x][y];
         int next_x = x;
         int next_y = y;
 
-        if (!isWallInDirection(x, y, NORTH) && y + 1 < MAZE_SIZE &&
+        if (!isWallInDirection(x, y, NORTH) && y + 1 < mazeHeight &&
             distances[x][y + 1] >= 0 && distances[x][y + 1] < best_distance) {
             best_distance = distances[x][y + 1];
             next_x = x;
             next_y = y + 1;
         }
-        if (!isWallInDirection(x, y, EAST) && x + 1 < MAZE_SIZE &&
+        if (!isWallInDirection(x, y, EAST) && x + 1 < mazeWidth &&
             distances[x + 1][y] >= 0 && distances[x + 1][y] < best_distance) {
             best_distance = distances[x + 1][y];
             next_x = x + 1;

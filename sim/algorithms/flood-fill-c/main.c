@@ -13,8 +13,8 @@ int main(int argc, char* argv[]) {
         Action nextMove = solver();
 
         // displays distances on the squares in the simulator
-        for (int x = 0; x < MAZE_SIZE; ++x) {
-            for (int y = 0; y < MAZE_SIZE; ++y) {
+        for (int x = 0; x < mazeWidth; ++x) {
+            for (int y = 0; y < mazeHeight; ++y) {
                 API_setText(x, y, distances[x][y]);
             }
         }

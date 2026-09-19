@@ -5,7 +5,10 @@ typedef enum Heading {NORTH, EAST, SOUTH, WEST} Heading;
 typedef enum Action {LEFT, FORWARD, RIGHT, IDLE} Action;
 
 /* MAZE CONSTANTS */
-#define MAZE_SIZE 16
+// Array capacity (not the actual maze size). Covers the largest maze we
+// expect to load (halfsize competitions are 32x32); actual dimensions are
+// read at runtime from the simulator via API_mazeWidth()/API_mazeHeight().
+#define MAZE_MAX_SIZE 32
 /*
 Sets the different types of cells (the walls around a given cell) in the format:
     _TopWall RightWall BottomWall LeftWall
@@ -29,8 +32,10 @@ Sets the different types of cells (the walls around a given cell) in the format:
 #define _1110 14
 #define _1111 15    // not actually possible in a maze
 
-extern unsigned int maze[MAZE_SIZE][MAZE_SIZE];
-extern int distances[MAZE_SIZE][MAZE_SIZE];
+extern unsigned int maze[MAZE_MAX_SIZE][MAZE_MAX_SIZE];
+extern int distances[MAZE_MAX_SIZE][MAZE_MAX_SIZE];
+extern int mazeWidth;
+extern int mazeHeight;
 
 struct Coordinate {
     int x;
