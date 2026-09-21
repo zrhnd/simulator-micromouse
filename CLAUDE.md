@@ -21,6 +21,9 @@ micromouse/
                        lengkap untuk belajar. Ini yang dipakai, bukan mms-cpp.
       mms-cpp/        template C++ kosong, disimpan sebagai referensi kalau
                        nanti porting firmware pakai C++ (belum dipakai)
+      q-learning/     EKSPERIMEN — Q-learning di Python, hanya untuk dicoba di
+                       simulator (bukan kandidat firmware/robot nyata, jadi
+                       sengaja Python bukan C). Lihat catatan di bawah.
     mms-app/          simulator mms siap pakai (mms.exe + DLL, Windows)
     mms-src/          source code simulator mms, untuk dibaca/referensi
     mazes/mazefiles/  522 maze kompetisi asli (All Japan, APEC, AAMC, dst),
@@ -80,6 +83,50 @@ mana saja. Jadi simulator ini cuma cocok buat latihan gaya "classic".
   STM32 (RAM jauh lebih terbatas).
 - Ada sisa dead code di `updateMaze()` (variabel `north` tidak dipakai,
   komentar `// REMOVE LATER`) — aman diabaikan/dibersihkan kapan saja.
+
+## q-learning — catatan implementasi
+
+- Eksperimen, bukan algoritma aktif kompetisi (itu tetap flood-fill-c).
+  Python dipilih (bukan C) karena tujuannya khusus dicoba di simulator `mms`,
+  bukan untuk di-porting ke firmware STM32.
+- State = posisi sel (x,y) saja; heading TIDAK masuk Q-table (aksi = arah
+  mutlak N/E/S/W, robot berbelok otomatis sebelum maju) — state space jadi
+  W×H×4 nilai-Q saja, bukan W×H×4×4.
+- Training jalan lewat gerakan fisik sungguhan di `mms` (bukan simulasi
+  virtual di memori): tiap episode robot benar-benar jalan dari start, lalu
+  dipandu BFS (di atas peta yang sudah diketahui) untuk kembali ke start —
+  jadi tidak perlu klik tombol Reset simulator berulang-ulang untuk setiap
+  episode training (`wasReset()`/`ackReset()` cuma dipakai di akhir, untuk
+  menunggu user reset manual kalau mau mengulang seluruh proses).
+- Q-table + peta dinding yang sudah diketahui disimpan ke `qtable_state.pkl`
+  (gitignored) supaya training lanjut dari sesi sebelumnya, bukan mulai dari
+  nol tiap kali simulator dibuka ulang.
+- **Bug nyata yang sudah diperbaiki (ditemukan dari crash log user, run
+  pertama, maze 16x16, TANPA `qtable_state.pkl` lama sama sekali — jadi
+  bukan soal state lama)**: `navigate_home()` dulu menghitung SATU rencana
+  BFS di awal lalu mengeksekusi semua langkahnya membuta, tanpa sensor ulang
+  di tiap langkah — beda dari `run_episode()` (dan dari `flood-fill-c`) yang
+  selalu sensor+replan tiap langkah. Itu satu-satunya tempat yang melanggar
+  invariant "hanya bergerak ke arah yang baru saja dikonfirmasi terbuka",
+  dan bisa memicu `MouseCrashedError` yang sebelumnya tidak pernah ditangani
+  (proses mati dengan traceback mentah). Sekarang `navigate_home()`
+  sense+BFS ulang di SETIAP langkah, sama seperti `flood-fill-c`.
+- **Bug terkait yang juga diperbaiki**: `run_episode()` dulu selalu asumsi
+  mouse mulai menghadap `"N"`, padahal tidak ada reset sungguhan di `mms`
+  antar episode (cuma jalan fisik pulang lewat `navigate_home()`) — kalau
+  robot berhenti menghadap arah lain, asumsi `"N"` di episode berikutnya
+  bikin heading yang dilacak Python desync dari heading asli robot, merusak
+  semua pemetaan sensor depan/kanan/kiri/belakang→arah mutlak sesudahnya.
+  Sekarang heading asli diteruskan (threaded) lewat seluruh loop di `main()`.
+- **Proteksi tambahan (defense in depth, bukan fix utama)**: `qtable_state.pkl`
+  dari maze lain yang KEBETULAN beda ukuran (lebar/tinggi) otomatis dibuang
+  saat dimuat (`load_state()`), dan seluruh training/run akhir dibungkus
+  `try/except MouseCrashedError` supaya kalau masih ada crash (mis. maze
+  lain yang ukurannya SAMA tapi tata letaknya beda), programnya berhenti
+  dengan pesan jelas alih-alih traceback mentah.
+- Belum menggambar dinding yang baru disensor ke tampilan `mms` (tidak
+  panggil `setWall`, beda dari flood-fill-c yang menggambar tiap step) —
+  kosmetik saja, tidak memengaruhi korektnes algoritma.
 
 ## Hardware — catatan dari review skematik
 

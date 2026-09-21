@@ -2,3 +2,7 @@
 sim/algorithms/**/*.exe
 sim/algorithms/**/*.o
 sim/algorithms/**/*.obj
+
+# Runtime artifacts from the q-learning-c/q-learning algorithms
+sim/algorithms/**/__pycache__/
+sim/algorithms/**/qtable_state.pkl
