@@ -19,6 +19,8 @@ micromouse/
     algorithms/
       flood-fill-c/   ALGORITMA AKTIF — flood fill (BFS) di C, sudah dikomentari
                        lengkap untuk belajar. Ini yang dipakai, bukan mms-cpp.
+      astar-c/        A* di C, satu file (astar.c) + API.h/API.c. Kandidat
+                       alternatif flood-fill-c. Lihat catatan di bawah.
       mms-cpp/        template C++ kosong, disimpan sebagai referensi kalau
                        nanti porting firmware pakai C++ (belum dipakai)
       q-learning/     EKSPERIMEN — Q-learning di Python, hanya untuk dicoba di
@@ -127,6 +129,38 @@ mana saja. Jadi simulator ini cuma cocok buat latihan gaya "classic".
 - Belum menggambar dinding yang baru disensor ke tampilan `mms` (tidak
   panggil `setWall`, beda dari flood-fill-c yang menggambar tiap step) —
   kosmetik saja, tidak memengaruhi korektnes algoritma.
+
+## astar-c — catatan implementasi
+
+- Kandidat alternatif dari `flood-fill-c`, algoritma A* (bukan BFS). Satu
+  file (`astar.c`, konsolidasi dari `main.c`+`solver.h`+`solver.c` yang
+  dulu terpisah, biar gampang dibaca) + `API.h`/`API.c` yang identik
+  boilerplate-nya dengan `flood-fill-c`.
+- Build Command: `gcc -std=c11 -O2 -o algo.exe astar.c API.c` (2 file, bukan
+  3, karena sudah digabung).
+- `aStarSearch()` dijalankan ulang dari nol tiap langkah (`gCost[][]`,
+  `cameFrom[][]`, `closedSet[][]`, `inOpenSet[][]` di-reset penuh tiap
+  panggilan) — beda dari `distances[][]` di flood-fill-c yang menyebar ke
+  seluruh labirin, A* cuma menjelajah sebagian sel yang diarahkan
+  heuristik (jarak Manhattan ke goal cell terdekat) sampai goal ketemu.
+  Open/closed set diimplementasi lewat larik biasa + pemindaian linear
+  (bukan priority queue/heap), cukup cepat untuk labirin ≤32×32.
+- Aturan goal (`getGoalCells()`) sama persis logikanya dengan
+  `resetDistances()` di flood-fill-c (1/2/4 sel tengah tergantung
+  paritas lebar/tinggi, plus siklus tengah↔start lewat `reached_center`).
+- Tampilan `gCost` di tiap sel (`main()`) pakai `API_clearText()` untuk
+  sel yang belum pernah disentuh pencarian pada langkah itu (bukan
+  ditampilkan sebagai `-1`), karena A* memang tidak mengisi seluruh
+  labirin seperti BFS.
+- **Known quirk (belum diubah)**: kolom `REROUTE` di log jauh lebih
+  sering terisi dibanding `flood-fill-c`, karena heuristiknya mengarah
+  ke goal cell mana pun yang *saat itu* paling dekat dari posisi robot,
+  dan cell mana yang paling dekat bisa berpindah antar langkah walau
+  tidak ada dinding baru sama sekali — jadi field ini tidak semurni
+  penanda "dinding baru ditemukan" seperti di flood-fill-c.
+- Sempat terhambat build di Windows karena kebijakan Application Control
+  organisasi memblokir `collect2.exe` (bagian linker MinGW), sudah
+  dibereskan sendiri oleh user.
 
 ## Hardware — catatan dari review skematik
 
