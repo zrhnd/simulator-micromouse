@@ -6,3 +6,7 @@ sim/algorithms/**/*.obj
 # Runtime artifacts from the q-learning-c/q-learning algorithms
 sim/algorithms/**/__pycache__/
 sim/algorithms/**/qtable_state.pkl
+sim/algorithms/**/qtable_export.csv
+sim/algorithms/**/qtable_export.json
+sim/algorithms/**/episode_log.csv
+sim/algorithms/**/training_plot.png

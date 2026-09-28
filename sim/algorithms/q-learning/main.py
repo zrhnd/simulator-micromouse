@@ -36,6 +36,7 @@ Jika ternyata arah gerak robot di simulatormu terbalik, tinggal tukar tanda
 pada dict DELTA di bawah.
 """
 
+import csv
 import os
 import pickle
 import random
@@ -145,6 +146,7 @@ USE_REWARD_SHAPING = True   # bantu belajar lebih cepat di maze besar (16x16)
 SHAPING_WEIGHT = 1.0        # set False/0 kalau mau Q-learning "murni"
 
 STATE_FILE = "qtable_state.pkl"
+EPISODE_LOG_FILE = "episode_log.csv"  # per-episode stats, overwritten each run -- see plot_training.py
 
 
 # ============================================================
@@ -441,6 +443,14 @@ def main():
     # must start from, or its sense() calls desync from the real mouse.
     heading = "N"
 
+    # Per-episode stats (episode, steps, success, reward, epsilon, best_len)
+    # for plot_training.py -- overwritten each run, so it always reflects the
+    # most recent training session. Flushed after every row so a partial log
+    # is still usable for plotting even if training is interrupted early.
+    log_f = open(EPISODE_LOG_FILE, "w", newline="", encoding="utf-8")
+    log_writer = csv.writer(log_f)
+    log_writer.writerow(["episode", "steps", "success", "reward", "epsilon", "best_len"])
+
     try:
         for ep in range(1, NUM_EPISODES + 1):
             path, reward, success, x, y, heading = run_episode(
@@ -448,6 +458,9 @@ def main():
             )
             if success and (best_len is None or len(path) < best_len):
                 best_len = len(path)
+
+            log_writer.writerow([ep, len(path), int(success), reward, epsilon, best_len or ""])
+            log_f.flush()
 
             eprint(
                 f"[Episode {ep}/{NUM_EPISODES}] "
@@ -488,6 +501,8 @@ def main():
             "beserta baris log [Episode N/...] terakhir sebelum crash."
         )
         return
+    finally:
+        log_f.close()
 
     eprint("Selesai. Menunggu (tekan reset di simulator jika ingin mengulang).")
     while True:
