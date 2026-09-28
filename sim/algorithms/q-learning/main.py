@@ -20,8 +20,12 @@ Desain singkat:
            relatif (maju/kiri/kanan).
 - Reward : -1 tiap langkah (dorong jalur sependek mungkin), +100 saat
            mencapai sel tujuan (2x2 di tengah maze), plus reward shaping
-           opsional berdasarkan jarak Manhattan ke tujuan supaya belajar
-           lebih cepat pada maze besar (16x16).
+           opsional (potential-based, lihat bfs_distances_to_goal()) supaya
+           belajar lebih cepat pada maze besar (16x16). Potensinya = jarak
+           BFS ke goal lewat dinding yang SUDAH DIKETAHUI robot (bukan
+           jarak garis lurus/Manhattan -- itu buta dinding dan bisa membuat
+           agen terjebak maju-mundur ke jalan buntu yang "kelihatan" dekat
+           padahal sebenarnya harus memutar).
 - Dinding diketahui lewat sensor (wallFront/Right/Left/Back) dan disimpan
   di peta internal (KnownMap) supaya tidak perlu sensor ulang untuk sel
   yang sudah pernah dikunjungi -- ini juga dipakai untuk mencari jalan
@@ -219,8 +223,33 @@ def compute_goal_cells(w, h):
     return {(gx, gy) for gx in xs for gy in ys}
 
 
-def manhattan_to_goal(x, y, goal_cells):
-    return min(abs(x - gx) + abs(y - gy) for gx, gy in goal_cells)
+def bfs_distances_to_goal(kmap, goal_cells):
+    """Multi-source BFS from every goal cell, spread through the maze's
+    CURRENTLY KNOWN open passages -- same idea as flood-fill-c's own flood
+    fill (see its distances[][]), just used here for reward shaping instead
+    of navigation. Returns {(x, y): distance}; a cell absent from the dict
+    is unreachable from what's known so far (behind an undiscovered wall),
+    same convention as flood-fill-c's distances[][] == -1.
+
+    This replaces the old plain Manhattan-distance shaping, which doesn't
+    know about walls: a dead-end cell can be Manhattan-closer to the goal
+    than the cell next to it, which made the agent think stepping into that
+    dead end was a great move, then bounce back and forth between the two
+    forever once it hit the wall. BFS over known walls can't make that
+    mistake -- a dead end's BFS distance reflects the real detour required.
+    """
+    dist = {g: 0 for g in goal_cells}
+    q = deque(goal_cells)
+    while q:
+        cx, cy = q.popleft()
+        d = dist[(cx, cy)]
+        for direction in DIRS:
+            if kmap.get(cx, cy, direction) is False:
+                nx, ny = cx + DELTA[direction][0], cy + DELTA[direction][1]
+                if (nx, ny) not in dist:
+                    dist[(nx, ny)] = d + 1
+                    q.append((nx, ny))
+    return dist
 
 
 # ============================================================
@@ -290,9 +319,19 @@ def run_episode(agent, kmap, goal_cells, max_steps, alpha, gamma, epsilon, start
         terminal = (nx, ny) in goal_cells
         reward = GOAL_REWARD if terminal else STEP_REWARD
         if USE_REWARD_SHAPING and not terminal:
-            reward += SHAPING_WEIGHT * (
-                manhattan_to_goal(x, y, goal_cells) - manhattan_to_goal(nx, ny, goal_cells)
-            )
+            # Potential-based shaping F(s->s') = gamma*Phi(s') - Phi(s), with
+            # Phi(s) = -distance_to_goal(s) (closer to goal = higher
+            # potential). This exact form is what Ng et al. (1999) prove
+            # leaves the optimal policy unchanged for ANY choice of
+            # potential function -- so this is just as legitimate a part of
+            # Q-learning as the base -1/+100 reward, not a shortcut around
+            # it. distance_to_goal comes from bfs_distances_to_goal(), using
+            # only walls the mouse has actually sensed so far.
+            dist_map = bfs_distances_to_goal(kmap, goal_cells)
+            d_here = dist_map.get((x, y))
+            d_next = dist_map.get((nx, ny))
+            if d_here is not None and d_next is not None:
+                reward += SHAPING_WEIGHT * (d_here - gamma * d_next)
 
         next_open = kmap.open_dirs(nx, ny)
         agent.update(x, y, action, reward, nx, ny, next_open, alpha, gamma, terminal)

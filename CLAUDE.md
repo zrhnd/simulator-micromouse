@@ -129,6 +129,22 @@ mana saja. Jadi simulator ini cuma cocok buat latihan gaya "classic".
 - Belum menggambar dinding yang baru disensor ke tampilan `mms` (tidak
   panggil `setWall`, beda dari flood-fill-c yang menggambar tiap step) —
   kosmetik saja, tidak memengaruhi korektnes algoritma.
+- **Bug nyata lain yang sudah diperbaiki (ditemukan dari pengamatan user:
+  robot "jerking" di dua sel yang sama sampai kehabisan langkah, pada
+  epsilon rendah/mendekati greedy)**: reward shaping dulu pakai jarak
+  **Manhattan** (garis lurus) ke goal, yang buta terhadap dinding. Sel jalan
+  buntu bisa Manhattan-nya sangat dekat ke goal padahal jalur asli (lewat
+  dinding yang diketahui) jauh memutar -- agen jadi mengira masuk ke jalan
+  buntu itu langkah bagus, lalu terjebak maju-mundur di situ karena
+  satu-satunya jalan keluar ya balik lagi. Sekarang shaping pakai
+  `bfs_distances_to_goal()` (BFS multi-source dari goal, sama persis dengan
+  ide `distances[][]` di flood-fill-c, tapi dihitung dari peta yang sudah
+  diketahui robot) -- tidak bisa lagi salah kira jalan buntu itu dekat.
+  Rumusnya juga dibetulkan jadi bentuk potential-based shaping yang benar
+  (Ng, Harada, Russell 1999): `F(s->s') = gamma*Phi(s') - Phi(s)` dengan
+  `Phi(s) = -jarak_ke_goal(s)` -- sebelumnya rumusnya `Phi(s) - Phi(s')`
+  tanpa faktor `gamma`, jadi bukan potential-based shaping yang benar-benar
+  sah (yang menjamin kebijakan optimal tidak berubah apapun potensinya).
 
 ## astar-c — catatan implementasi
 
