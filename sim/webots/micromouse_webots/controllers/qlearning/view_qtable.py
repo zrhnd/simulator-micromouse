@@ -4,7 +4,7 @@ Lihat isi qtable_state.pkl (hasil training qlearning.py di Webots).
 Format pkl sama dengan versi mms (sim/algorithms/q-learning/view_qtable.py).
 
 Cara pakai (dari folder ini):
-    python view_qtable.py                  # pakai qtable_state.pkl di folder ini
+    python view_qtable.py                  # pakai qtable_state_best.pkl (atau qtable_state.pkl bila belum ada)
     python view_qtable.py path/lain.pkl     # atau tunjuk file lain
 
 Menampilkan:
@@ -38,6 +38,17 @@ def load(path):
     data["q"] = {(x, y, DIRS[d] if isinstance(d, int) else d): v
                  for (x, y, d), v in data.get("q", {}).items()}
     return data
+
+
+def default_pkl():
+    """Pakai qtable_state_best.pkl (salinan manual hasil terbaik, tidak ditimpa
+    training baru); kalau belum ada, pakai qtable_state.pkl terbaru."""
+    here = Path(__file__).parent
+    best = here / "qtable_state_best.pkl"
+    if best.exists():
+        return best
+    print("qtable_state_best.pkl belum ada -> pakai qtable_state.pkl (hasil training terakhir)")
+    return here / "qtable_state.pkl"
 
 
 def open_dirs_of(walls, x, y):
@@ -106,7 +117,7 @@ def export_json(data, path):
 
 
 def main():
-    pkl_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "qtable_state.pkl"
+    pkl_path = Path(sys.argv[1]) if len(sys.argv) > 1 else default_pkl()
     if not pkl_path.exists():
         print(f"File tidak ditemukan: {pkl_path}")
         print("Belum ada training yang selesai (atau tunjuk path .pkl lain sebagai argumen).")

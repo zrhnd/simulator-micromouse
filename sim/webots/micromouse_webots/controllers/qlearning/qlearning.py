@@ -64,7 +64,7 @@ DEFAULT_MAZE = os.path.abspath(os.path.join(
 MAZE_FILE = os.environ.get("MM_MAZE") or DEFAULT_MAZE
 
 EPISODES = int(os.environ.get("MM_EPISODES", "500"))
-PATIENCE = int(os.environ.get("MM_PATIENCE", "100"))
+PATIENCE = int(os.environ.get("MM_PATIENCE", "200"))
 MAX_STEPS = int(os.environ.get("MM_MAX_STEPS", "400"))
 ALPHA = float(os.environ.get("MM_ALPHA", "0.3"))
 GAMMA = float(os.environ.get("MM_GAMMA", "0.95"))

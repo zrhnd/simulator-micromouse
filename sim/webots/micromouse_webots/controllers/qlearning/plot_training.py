@@ -5,7 +5,7 @@ qlearning.py di Webots (dibaca dari episode_log.csv). Beda dari versi mms: ada
 kolom sim_time (detik simulasi per episode), digambar sebagai grafik ke-3.
 
 Cara pakai (dari folder ini, SETELAH training selesai/berhenti):
-    python plot_training.py                  # pakai episode_log.csv di folder ini
+    python plot_training.py                  # pakai episode_log_best.csv (atau episode_log.csv bila belum ada)
     python plot_training.py path/lain.csv     # atau tunjuk file lain
 
 Menghasilkan training_plot.png (3 grafik dalam 1 gambar) di folder yang sama
@@ -25,6 +25,17 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")  # simpan ke file, tidak perlu jendela GUI
 import matplotlib.pyplot as plt
+
+
+def default_csv():
+    """Pakai episode_log_best.csv (salinan manual hasil terbaik, tidak ditimpa
+    training baru); kalau belum ada, pakai episode_log.csv terbaru."""
+    here = Path(__file__).parent
+    best = here / "episode_log_best.csv"
+    if best.exists():
+        return best
+    print("episode_log_best.csv belum ada -> pakai episode_log.csv (hasil training terakhir)")
+    return here / "episode_log.csv"
 
 
 def load_log(path):
@@ -53,7 +64,7 @@ def moving_average(values, window=10):
 
 
 def main():
-    csv_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "episode_log.csv"
+    csv_path = Path(sys.argv[1]) if len(sys.argv) > 1 else default_csv()
     if not csv_path.exists():
         print(f"File tidak ditemukan: {csv_path}")
         print("Belum ada training yang menghasilkan episode_log.csv (atau tunjuk path lain sebagai argumen).")
@@ -110,7 +121,7 @@ def main():
     ax3.grid(True, alpha=0.3)
 
     fig.tight_layout()
-    out_path = csv_path.parent / "training_plot.png"
+    out_path = csv_path.parent / ("training_plot_best.png" if csv_path.stem.endswith("_best") else "training_plot.png")
     fig.savefig(out_path, dpi=150)
     print(f"Grafik disimpan ke: {out_path}")
     print(f"Total episode: {len(episodes)}, berhasil: {sum(success)}, gagal: {len(episodes) - sum(success)}")
