@@ -164,6 +164,33 @@ def features(raw, arena, n_decisions, prev_ir=None):
     return vec, ir
 
 
+def draw_state_hud(display, s, action_name, n_decisions, eps, reward, total):
+    """Tampilkan 13 angka state (persis yang dilihat jaringan) + konteks singkat di Display
+    "state_hud" milik robot (lihat micromouse_continuous_dqn.wbt). Dipanggil tiap keputusan,
+    termasuk selama training -- bukan cuma evaluasi. display bisa None (world lama tanpa
+    Display ini); dalam hal itu fungsi tidak melakukan apa-apa."""
+    if display is None:
+        return
+    lines = [
+        f"dec={n_decisions:4d} eps={eps:.2f} a={action_name}",
+        f"IR  fl={s[0]:.2f} fr={s[1]:.2f}",
+        f"    dl={s[2]:.2f} dr={s[3]:.2f}",
+        f"pos x={s[4]:+.2f} y={s[5]:+.2f} (frac. arena)",
+        f"yaw sin={s[6]:+.2f} cos={s[7]:+.2f}",
+        f"t={s[8]:.2f}",
+        f"dIR fl={s[9]:+.2f} fr={s[10]:+.2f}",
+        f"    dl={s[11]:+.2f} dr={s[12]:+.2f}",
+        f"r={reward:+.2f} total={total:+.1f}",
+    ]
+    display.setColor(0x202020)
+    display.fillRectangle(0, 0, display.getWidth(), display.getHeight())
+    display.setColor(0x33FF66)
+    y = 4
+    for line in lines:
+        display.drawText(line, 4, y)
+        y += 14
+
+
 def shield(raw):
     """Lapisan pengaman (refleks): kembalikan aksi menghindar bila IR mendeteksi rintangan, atau None.
     Aturan dasar sama dengan aturan reaktif terbaik hasil uji (ambang ADC 150 ~ 100-175 mm):
@@ -314,6 +341,7 @@ def run_episode(env, agent, eps, learn, record_path=False, start_yaw=None):
     env.record_stuck = learn            # evaluasi tidak menambah hitungan titik macet
     raw = env.reset(start_yaw)
     s, ir = features(raw, env.arena, 0)
+    display = env.robot.getDevice("state_hud")   # None kalau world belum punya Display ini
     total, path = 0.0, []
     agent.ep_counts, agent.ep_greedy, agent.ep_shield = [0] * len(ACTIONS), 0, 0     # statistik episode ini
     agent.ep_escape = 0
@@ -404,6 +432,7 @@ def run_episode(env, agent, eps, learn, record_path=False, start_yaw=None):
             q_sum += agent.last_q
             q_n += 1
         total += r
+        draw_state_hud(display, s2, ACTION_NAMES[a], env.n_decisions, eps, r, total)
         if record_path:
             x, y, _ = env.true_pose()
             path.append((round(x, 4), round(y, 4)))
@@ -452,10 +481,13 @@ def main():
     rng = random.Random(SEED)
     torch.manual_seed(SEED)
     agent = DQNAgent(N_FEATURES, len(ACTIONS), rng, gamma=GAMMA, n_policy=N_POLICY_ACTIONS, n_step=N_STEP)
-    print(f"continuous_dqn: seed={SEED} episodes<={EPISODES} gamma={GAMMA} r_step={R_STEP_DQN} "
-          f"MODE={'DQN MURNI' if PURE_DQN else 'DQN+lapisan'} n_step={N_STEP} pengaman={'ON' if SAFETY_LAYER else 'off'} pemecah_loop={'ON' if ESCAPE_LAYER else 'off'} stuck_grow={arena_env.STUCK_GROW} zone_step={arena_env.ZONE_STEP} coll_grow={arena_env.COLL_GROW} r_goal_time={R_GOAL_TIME_DQN} r_collision_near={R_COLLISION_NEAR_DQN} r_stuck={R_STUCK_DQN} "
-          f"target_known={TARGET_KNOWN} "
-          f"start_heading={START_HEADING} aksi={list(ACTION_NAMES)}")
+    print(f"continuous_dqn: seed={SEED} episodes<={EPISODES} gamma={GAMMA} n_step={N_STEP}")
+    print(f"  mode={'DQN MURNI' if PURE_DQN else 'DQN+lapisan'} pengaman={'ON' if SAFETY_LAYER else 'off'} "
+          f"pemecah_loop={'ON' if ESCAPE_LAYER else 'off'} target_known={TARGET_KNOWN}")
+    print(f"  reward: r_step={R_STEP_DQN} r_goal_time={R_GOAL_TIME_DQN} "
+          f"r_collision_near={R_COLLISION_NEAR_DQN} r_stuck={R_STUCK_DQN}")
+    print(f"  zona: stuck_grow={arena_env.STUCK_GROW} zone_step={arena_env.ZONE_STEP} coll_grow={arena_env.COLL_GROW}")
+    print(f"  start_heading={START_HEADING} aksi={list(ACTION_NAMES)}")
 
     if EVAL_ONLY:
         agent.load_state_dict(torch.load(HERE / "dqn_model_best.pt")["state"])

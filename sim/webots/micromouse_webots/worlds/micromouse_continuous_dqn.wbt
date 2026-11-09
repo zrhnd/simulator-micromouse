@@ -842,6 +842,11 @@ Robot {
         8.727 8.727 0.01
       ]
     }
+    Display {
+      name "state_hud"
+      width 320
+      height 220
+    }
   ]
   name "micromouse"
   boundingObject Group {

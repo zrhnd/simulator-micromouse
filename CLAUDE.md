@@ -250,6 +250,36 @@ mana saja. Jadi simulator ini cuma cocok buat latihan gaya "classic".
   `late_arc_with_front=False`, `conservative_sides` + verifikasi sisi ambigu,
   `StallError`, skala roda saat saturasi (lihat README). Keluaran `episode_log.csv`
   dan `qtable_state.pkl` di folder controller (di-gitignore).
+- `controllers/rule_based/` (dunia `micromouse_rule_based.wbt`): algoritma
+  **rule-based** (bukan BFS/A*/Q-learning) — DFS murni berbasis aturan
+  prioritas kiri→depan→kanan→mundur (`navigation.py`, class
+  `RuleBasedNavigator`, logikanya murni Python tanpa dependensi Webots sama
+  sekali, gampang dites unit terpisah): di tiap sel, coba tetangga BELUM
+  DIKUNJUNGI sesuai urutan prioritas itu; kalau semua tetangga sudah
+  dikunjungi/tertutup, mundur ke sel induk lewat stack jalur (`self.path`).
+  `rule_based.py` menyambungkan navigator ini ke `motion.search_run` (sama
+  seperti `qlearning.py`/`floodfill.py`) — jadi tetap pakai gerak
+  berkelanjutan + pembacaan sensor yang sama, cuma logika KEPUTUSAN arahnya
+  beda (deterministik berbasis aturan, bukan pencarian/pembelajaran).
+  Validasi start wajib tepat di sel (0,0) menghadap utara (dicek lewat
+  Supervisor `getPosition`/`getOrientation`), dan sukses/gagal diukur juga
+  lewat kontak fisik Supervisor (`wall_contact_steps` harus 0, bukan cuma
+  "sampai sel goal").
+  **Diambil dari fork teman user (`github.com/iqqy-x/simulator-micromouse`
+  — `CLAUDE.md`-nya masih mencatat remote zrhnd asal fork, tapi ini
+  project teman, bukan device/akun user sendiri)**, bukan dibuat di sesi
+  ini. **Sengaja TIDAK di-commit/push ke `origin` (zrhnd) di sini** — biar
+  temannya sendiri yang push versi lengkapnya nanti; file ini cuma disalin
+  ke working tree lokal user untuk dicoba. `micromouse_controller.py` di
+  fork itu 10 baris lebih maju dari versi lokal (refactor `_lateral_nudge`/
+  `search_run`: nudge lateral bisa lewat lorong depan ATAU belakang, dulu
+  cuma belakang) — BELUM ditarik ke sini supaya tidak mengubah perilaku
+  `floodfill`/`qlearning`/`wall_test` yang hasilnya sudah divalidasi &
+  dicatat di atas; `rule_based` tetap jalan di atas `search_run` versi
+  lokal (lebih sederhana, bukan tidak berfungsi). Mesh 3D yang dipakai
+  world ini (`meshes/parts/*.obj`) sudah dicek identik byte-per-byte
+  dengan yang ada di lokal, jadi tidak perlu disalin ulang. Belum dites
+  jalan di sesi ini (tidak ada GUI Webots di sini).
 - **Status** (diuji headless lewat `webots.exe --batch --no-rendering
   --mode=fast`; controller berupa Supervisor sehingga posisi SEBENARNYA
   tercatat di `run_log.txt` untuk validasi, tidak dipakai navigasi):
@@ -371,6 +401,15 @@ bullet Keluaran).
   target, robot condong lewat tengah dan menumpuk tabrakan di rintangan jalur lurus.
 - Pekerjaan rule-based teman (controllers/rule_based, micromouse_rule_based.wbt, versi
   baru micromouse_controller.py) belum di-commit; user minta teman yang push.
+- **continuous_dqn — HUD state di layar**: `micromouse_continuous_dqn.wbt` punya
+  `Display { name "state_hud" width 320 height 220 }` di children robot (diedit
+  manual, bukan lewat `make_continuous_world.py` — skrip itu hanya generate world
+  Q-learning). `continuous_dqn.py`: `draw_state_hud()` menulis 13 angka state (4 IR,
+  x/y odometri, sin/cos arah, waktu, 4 selisih IR) + aksi/eps/reward sebagai teks
+  hijau di Display tiap keputusan, dipanggil dari `run_episode()` (jalur yang sama
+  dipakai training dan evaluasi, jadi tampil juga saat training). `getDevice()`
+  mengembalikan `None` bila world lama belum punya Display ini -> fungsi langsung
+  return, tidak error.
 
 ## Hardware — catatan dari review skematik
 
