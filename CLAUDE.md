@@ -374,10 +374,10 @@ bullet Keluaran).
   sebagai SATU berkas di folder `hasil_analisis/` (tidak digabung): `01_reward`,
   `02_success_rate_epsilon`, `03_langkah_episode_sukses`, `04_komposisi_hasil`,
   `05_langkah_area_bahaya`, `06_jumlah_state`, `07_jalur_evaluasi`, `08_titik_akhir`,
-  `09_tabrakan_pinggir_tengah`, `10_heatmap_tabrakan` (satu heatmap, semua episode),
-  `ringkasan.txt` (angka-angka), dan `11_animasi_jalur_evaluasi.gif` bila `--gif`. `python analisis.py` -> nama tanpa akhiran; `--best` -> berakhiran
+  `09_heatmap_tabrakan` (satu heatmap, semua episode), `10_jalur_peta_rintangan` dan `11_heatmap_tabrakan_peta_rintangan` (hanya bila ada `eval_result_rintangan[_best].json`, evaluasi model yang sama di world `*_rintangan.wbt`),
+  `ringkasan.txt` (angka-angka), dan `12_animasi_jalur_evaluasi.gif` bila `--gif` (nomor 10 bila tanpa peta rintangan). `python analisis.py` -> nama tanpa akhiran; `--best` -> berakhiran
   `_best` dan membaca file `*_best`. Opsi lain: `--last N`, `--from N`, `--window`,
-  `--bins`, `--edge`, `--csv`, `--eval`, `--outdir`.
+  `--bins`, `--csv`, `--eval`, `--outdir`.
   **Yang di-push hanya**: kode (`arena_env.py`, `continuous_qlearning.py`,
   `analisis.py`), tiga file `*_best`, dan `hasil_analisis/*_best.png`, `*_best.gif`,
   `ringkasan_best.txt`. Keluaran biasa (`qtable_state.pkl`, `episode_log.csv`,

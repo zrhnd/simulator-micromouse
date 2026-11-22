@@ -13,12 +13,13 @@ Pakai (dari folder ini, di luar Webots):
     python analisis.py --outdir X       # folder keluaran lain
 
 Berkas yang dibuat:
-    01_reward                 05_langkah_area_bahaya      09_tabrakan_pinggir_tengah   12_porsi_aksi
-    02_success_rate_epsilon   06_q_rata_rata              10_heatmap_tabrakan          ringkasan.txt
-    03_langkah_episode_sukses 07_jalur_evaluasi           11_animasi_jalur_evaluasi.gif (--gif)
-    04_komposisi_hasil        08_titik_akhir
-Hanya bila lapisan buatan aktif (log punya pengaman/pemecah/putaran > 0, mode PURE_DQN=False):
-    13_pengaman_pemecah, 14_porsi_greedy  (di mode murni dilewati: 13 selalu 0, 14 = 1 - epsilon).
+    01_reward                 05_langkah_area_bahaya      09_heatmap_tabrakan
+    02_success_rate_epsilon   06_q_rata_rata              10_jalur_peta_rintangan, 11_heatmap_tabrakan_peta_rintangan
+    03_langkah_episode_sukses 07_jalur_evaluasi               (hanya bila ada eval_result_rintangan[_best].json, atau --rintangan)
+    04_komposisi_hasil        08_titik_akhir              lalu animasi_jalur_evaluasi.gif (--gif), porsi_aksi, ringkasan.txt
+Nomor berikutnya berlanjut tanpa lompatan (tanpa peta rintangan: 10 = animasi/porsi_aksi, dst.).
+Hanya bila lapisan buatan aktif (log punya pengaman/pemecah/putaran > 0, LAPISAN_BUATAN=True):
+    pengaman_pemecah dan porsi_greedy (dilewati bila lapisan mati: pengaman selalu 0, porsi greedy = 1 - epsilon).
 Tiap nama berakhiran _best bila memakai --best.
 """
 import argparse
@@ -67,7 +68,7 @@ def load_dqn(path):
 
 
 def has_layers(d):
-    """True bila lapisan buatan pernah aktif (mode PURE_DQN=False)."""
+    """True bila lapisan buatan pernah aktif (LAPISAN_BUATAN=True)."""
     return float(d["pengaman"].sum() + d["pemecah"].sum() + d["putaran"].sum()) > 0
 
 
@@ -121,7 +122,7 @@ def panel_greedy(ax, d, W):
     ax.grid(alpha=.25)
 
 
-def summary(d, lay, W, edge):
+def summary(d, lay, W):
     n = len(d["ep"])
     cnt = {k: int((d["out"] == k).sum()) for k in qa.OUTCOMES}
     m = moving((d["out"] == "goal").astype(float), W)
@@ -133,13 +134,6 @@ def summary(d, lay, W, edge):
          f"  success rate maks  : {m[k]:.2f} (jendela {W}) di episode {d['ep'][k]}",
          f"  epsilon akhir      : {d['eps'][-1]:.2f}",
          f"  langkah di bahaya  : rata-rata {d['haz'].mean():.1f} per episode"]
-    if d["x"] is not None and cnt["collision"]:
-        wd = qa._wall_dist(d, lay)
-        c = d["out"] == "collision"
-        kk = int(c.sum())
-        pi = int((wd[c] < edge).sum())
-        L += ["", f"TABRAKAN: pinggir (< {edge:g} m dari dinding) vs tengah",
-              f"  {kk} tabrakan: pinggir {pi} ({pi / kk * 100:.0f}%), tengah {kk - pi} ({(kk - pi) / kk * 100:.0f}%)"]
     L += ["", "EVALUASI GREEDY (epsilon 0)", f"  sampai target      : {lay['success']}/{lay['n']}"]
     for h, outs in (lay.get("by_heading") or {}).items():
         L.append(f"  arah {float(h):5.1f} deg    : {sum(o == 'goal' for o in outs)}/{len(outs)} goal")
@@ -159,7 +153,7 @@ def summary(d, lay, W, edge):
                  f"pemutus orbit {d['putaran'][tail].mean():.2f} per episode")
         L.append(f"  porsi greedy       : {(d['greedy'][tail] / np.maximum(d['dec'][tail], 1)).mean() * 100:.0f}% keputusan")
     else:
-        L.append("  mode               : DQN murni (tanpa pengaman, pemecah, pemutus orbit)")
+        L.append("  mode               : DQN tanpa lapisan buatan (tanpa pengaman, pemecah, pemutus orbit)")
     if d["q"] is not None:
         q = d["q"][tail]
         L.append(f"  Q rata-rata        : {q.mean():.2f} (batas atas target {Y_MAX:g}; menempel di batas = tanda optimis)")
@@ -184,8 +178,9 @@ def main():
     ap.add_argument("--last", type=int, default=0, help="hanya N episode terakhir")
     ap.add_argument("--from", dest="start", type=int, default=0, help="mulai dari episode ini")
     ap.add_argument("--window", type=int, default=50, help="jendela rata-rata bergerak")
-    ap.add_argument("--bins", type=int, default=24, help="kehalusan heatmap")
-    ap.add_argument("--edge", type=float, default=0.40, help="lebar pita pinggir (m)")
+    ap.add_argument("--bins", type=int, default=240, help="resolusi heatmap (kotak halus per sumbu)")
+    ap.add_argument("--sigma", type=float, default=0.065, help="lebar penghalusan heatmap (m)")
+    ap.add_argument("--rintangan", default=None, help="eval_result*.json dari peta + rintangan tambahan (bawaan eval_result_rintangan[_best].json)")
     ap.add_argument("--csv", default=None)
     ap.add_argument("--eval", default=None)
     ap.add_argument("--outdir", default=None)
@@ -217,28 +212,30 @@ def main():
     save_one(outdir, "07_jalur_evaluasi", sfx, square, lambda ax: qa.panel_paths(ax, lay))
     if d["x"] is not None:
         save_one(outdir, "08_titik_akhir", sfx, square, lambda ax: qa.panel_endpoints(ax, d, lay))
-        save_one(outdir, "09_tabrakan_pinggir_tengah", sfx, wide, lambda ax: qa.panel_edge_bar(ax, d, lay, a.edge))
         col = d["out"] == "collision"
-        h = qa.heat_hist(d, lay, a.bins, col)
+        h = qa.heat_hist(d, lay, a.bins, col, a.sigma)
 
         def draw_heat(ax):
             im = qa.panel_heat(ax, d, lay, h, max(1, h.max()), f"Heatmap tabrakan: {int(col.sum())} tabrakan",
                                np.ones(len(d["ep"]), bool))
-            ax.figure.colorbar(im, ax=ax, fraction=.046, pad=.02, label="tabrakan per kotak")
+            ax.figure.colorbar(im, ax=ax, fraction=.046, pad=.02, label="tabrakan per 0,1 m × 0,1 m (dihaluskan)")
 
-        save_one(outdir, "10_heatmap_tabrakan", sfx, square, draw_heat)
-    save_one(outdir, "12_porsi_aksi", sfx, (11, 5.5), lambda ax: panel_aksi(ax, d, W))
+        save_one(outdir, "09_heatmap_tabrakan", sfx, square, draw_heat)
+    n_r = qa.peta_rintangan(outdir, sfx, a.rintangan or HERE / f"eval_result_rintangan{sfx}.json", 10, a.bins, a.sigma)
+    k = 10 + n_r                      # nomor animasi gif (bila --gif); grafik berikutnya berlanjut tanpa lompatan
+    j = k + (1 if a.gif else 0)
+    save_one(outdir, f"{j}_porsi_aksi", sfx, (11, 5.5), lambda ax: panel_aksi(ax, d, W))
     if has_layers(d):
-        save_one(outdir, "13_pengaman_pemecah", sfx, wide, lambda ax: panel_intervensi(ax, d, W))
-        save_one(outdir, "14_porsi_greedy", sfx, wide, lambda ax: panel_greedy(ax, d, W))
+        save_one(outdir, f"{j + 1}_pengaman_pemecah", sfx, wide, lambda ax: panel_intervensi(ax, d, W))
+        save_one(outdir, f"{j + 2}_porsi_greedy", sfx, wide, lambda ax: panel_greedy(ax, d, W))
     else:
-        print("mode DQN murni: grafik 13 (pengaman/pemecah) dan 14 (porsi greedy) dilewati")
+        print("tanpa lapisan buatan: grafik pengaman/pemecah dan porsi greedy dilewati")
 
-    txt = "\n".join(summary(d, lay, W, a.edge)) + "\n"
+    txt = "\n".join(summary(d, lay, W)) + "\n"
     (outdir / f"ringkasan{sfx}.txt").write_text(txt, encoding="utf-8")
     print("ditulis:", outdir / f"ringkasan{sfx}.txt")
     if a.gif:
-        qa.make_gif(lay, a.episode, outdir / f"11_animasi_jalur_evaluasi{sfx}.gif")
+        qa.make_gif(lay, a.episode, outdir / f"{k}_animasi_jalur_evaluasi{sfx}.gif")
 
 
 if __name__ == "__main__":

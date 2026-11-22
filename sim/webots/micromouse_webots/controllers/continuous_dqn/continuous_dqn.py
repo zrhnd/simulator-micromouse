@@ -13,12 +13,11 @@ Pose awal: posisi TETAP (0,18 ; 0,18) m; arah hadap ACAK seragam 0-90 derajat ko
 
 Training berhenti (sama dengan Q-learning) bila success rate WINDOW episode terakhir >= CONVERGED, atau
 tidak membaik selama PATIENCE episode (dihitung setelah epsilon minimum), atau EPISODES habis.
-EARLY_STOP=False mematikan dua syarat pertama; STOP_AT_EPS_MIN=True berhenti begitu epsilon minimum. Bobot dengan
-success rate tertinggi disimpan ke dqn_model.pt (pembanding); evaluasi greedy (epsilon 0) memakai
-JARINGAN TERAKHIR (dqn_model_last.pt), bukan yang rate-nya tertinggi.
+EARLY_STOP=False mematikan dua syarat pertama; STOP_AT_EPS_MIN=True berhenti begitu epsilon minimum. Model terpilih (skor evaluasi greedy terbaik, MM_SELEKSI=0: rate tertinggi) disimpan ke dqn_model.pt; evaluasi greedy (epsilon 0) utama memakai
+model itu (sama dengan Q-learning); jaringan terakhir (dqn_model_last.pt) dievaluasi sebagai pembanding.
 
 Variabel lingkungan (opsional, hanya bila Webots dijalankan dari terminal):
-  MM_EPISODES, MM_SEED, MM_PATIENCE, MM_EVAL_ONLY=1 (muat dqn_model_best.pt), MICROMOUSE_QUIT=1
+  MM_EPISODES, MM_SEED, MM_PATIENCE, MM_EVAL_ONLY=1 (muat dqn_model_best.pt atau berkas MM_MODEL; MM_EVAL_HEADINGS, MM_EVAL_REPEATS), MICROMOUSE_QUIT=1
 Keluaran di folder ini: episode_log.csv, dqn_model.pt, eval_result.json, stuck_hotspots.json (titik macet dan titik tabrakan beserta jumlahnya).
 Catatan: kolom "states" di episode_log.csv berisi jumlah transisi di replay buffer; "greedy" =
 jumlah keputusan greedy (bukan acak) yang tidak diganti pengaman; aksi_0..aksi_9 = berapa kali tiap
@@ -44,28 +43,11 @@ import arena_env                                  # noqa: E402
 from arena_env import ArenaEnv, TARGET_KNOWN      # noqa: E402
 from dqn_agent import DQNAgent                    # noqa: E402
 
-# Daftar aksi DQN menimpa daftar 5 aksi milik Q-learning (arena_env membacanya saat step()).
-ACTIONS = (
-    (10.0, 10.0),    # 0 lurus cepat
-    (5.0, 5.0),      # 1 lurus pelan
-    (5.0, 10.0),     # 2 busur kiri landai
-    (10.0, 5.0),     # 3 busur kanan landai
-    (0.0, 10.0),     # 4 belok kiri tajam
-    (10.0, 0.0),     # 5 belok kanan tajam
-    (0.0, 5.0),      # 6 belok kiri tajam, pelan
-    (5.0, 0.0),      # 7 belok kanan tajam, pelan
-    (-5.0, 5.0),     # 8 putar kiri di tempat (roda kiri mundur, kanan maju; ~14 derajat per keputusan)
-    (5.0, -5.0),     # 9 putar kanan di tempat
-)
-ACTION_NAMES = ("lurus-cepat", "lurus-pelan", "kiri-landai", "kanan-landai", "kiri-tajam",
-                "kanan-tajam", "kiri-tajam-pelan", "kanan-tajam-pelan", "putar-kiri",
-                "putar-kanan")
-arena_env.ACTIONS = ACTIONS
-arena_env.ACTION_NAMES = ACTION_NAMES
+# Himpunan aksi (10 aksi) dipakai bersama dengan Q-learning: satu tabel di arena_env.py.
+from arena_env import ACTIONS, ACTION_NAMES      # noqa: E402
 # REWARD = SAMA DENGAN Q-LEARNING (apple to apple): goal +100, tabrakan -100, macet -30 (episode berakhir),
 # timeout -20, -0,05 per keputusan, putar di tempat -0,10, area bahaya -3 per keputusan, bonus sel baru
 # +0,3..+1,5. Tidak ada bonus waktu, penalti tabrakan dekat start, penalti yang membesar, atau penalti zona.
-arena_env.SPIN_ACTIONS = (8, 9)                  # hanya putar di tempat yang kena R_SPIN (aksi 4-7 = busur/pivot, seperti 'maju-kiri/kanan' Q-learning)
 R_STEP_DQN = -0.05
 arena_env.R_STEP = R_STEP_DQN
 R_GOAL_TIME_DQN = 0.0                            # bonus waktu goal dimatikan (Q-learning: imbalan goal tetap +100)
@@ -83,27 +65,35 @@ arena_env.COLL_GROW, arena_env.COLL_GROW_CAP = 0.0, 50.0
 arena_env.COLL_ZONE_STEP, arena_env.COLL_ZONE_CAP = 0.0, 1.0
 
 N_FEATURES = 13
-# MODE DQN MURNI (bawaan, untuk perbandingan apple to apple dengan Q-learning): tanpa pengaman, ingatan sisi, pemecah
-# macet, dan pemutus orbit; DQN memilih SEMUA 10 aksi (termasuk putar di tempat, seperti Q-learning); fitur waktu
-# terpakai dan selisih IR (yang tidak ada di state Q-learning) dimatikan (diisi 0). False = DQN + lapisan buatan.
-# Dari terminal: MM_PURE=0 atau 1; dari GUI Webots ubah nilai bawaan di sini.
-PURE_DQN = os.environ.get("MM_PURE", "1") == "1"
-USE_TIME_FEATURE = not PURE_DQN
-USE_IR_DELTA = not PURE_DQN
-N_POLICY_ACTIONS = 10 if PURE_DQN else 8    # mode lapisan: aksi 0-7 dipilih DQN; 8 dan 9 (putar di tempat) hanya dari lapisan pengaman
-N_STEP = int(os.environ.get("MM_NSTEP", "20"))             # target 20-langkah (~0,37 m): memutus penguatan bias maks-Q (hasil uji offline: TD 1-langkah jenuh ke batas atas)
-GAMMA = float(os.environ.get("MM_GAMMA", "0.995"))          # horizon efektif ~200 keputusan (sebelumnya 0,99: ~100); bobot goal pada 220 keputusan 0,33 (sebelumnya 0,11)
+# Bawaan: DQN apa adanya (tanpa pengaman, ingatan sisi, pemecah macet, pemutus orbit), memilih SEMUA 10 aksi, dengan
+# informasi state yang sama dengan Q-learning (fitur waktu terpakai dan selisih IR diisi 0). Ini versi untuk
+# perbandingan dengan Q-learning. LAPISAN_BUATAN = True menyalakan lapisan refleks dan dua fitur tambahan tersebut.
+# Dari terminal: MM_LAPISAN=0 atau 1; dari GUI Webots ubah nilai bawaan di sini.
+LAPISAN_BUATAN = os.environ.get("MM_LAPISAN", "0") == "1"
+USE_TIME_FEATURE = LAPISAN_BUATAN
+USE_IR_DELTA = LAPISAN_BUATAN
+N_POLICY_ACTIONS = 8 if LAPISAN_BUATAN else 10    # dengan lapisan: aksi 0-7 dipilih DQN; 8 dan 9 (putar di tempat) hanya dari lapisan pengaman
+N_STEP = int(os.environ.get("MM_NSTEP", "20"))             # target 20-langkah (~0,37 m): memutus penguatan bias maks-Q (hasil uji luring: TD 1-langkah pada gamma ~0,995 jenuh)
+GAMMA = float(os.environ.get("MM_GAMMA", "0.995"))          # sama dengan Q-learning (disamakan ke 0,995); horizon efektif ~200 keputusan
 EPS_START, EPS_DECAY, EPS_MIN = 1.0, 0.9985, 0.05     # epsilon mencapai 0,05 sekitar episode 2.000 (sama dengan Q-learning)
 WINDOW, CONVERGED = 50, 0.95
-EARLY_STOP = True           # sama dengan Q-learning: berhenti bila rate >= CONVERGED, atau patience habis (dihitung setelah epsilon minimum)
+# Pemilihan model (sama dengan Q-learning): saat rate training >= SEL_MIN_RATE, tiap SEL_EVERY episode dijalankan
+# evaluasi greedy; model dengan skor terbaik (goal terbanyak, lalu keputusan paling sedikit) dipakai untuk evaluasi akhir.
+# MM_SELEKSI=0: pakai rate training tertinggi (cara lama).
+SELECT = os.environ.get("MM_SELEKSI", "1") == "1"
+SEL_MIN_RATE, SEL_EVERY = 0.9, 25
+EARLY_STOP = os.environ.get("MM_EARLY_STOP", "1") == "1"     # sama dengan Q-learning: berhenti bila rate >= CONVERGED, atau patience habis (dihitung setelah epsilon minimum). MM_EARLY_STOP=0: matikan
 STOP_AT_EPS_MIN = False     # True = berhenti begitu epsilon mencapai EPS_MIN (tanpa menunggu konvergen)
 EVAL_HEADINGS = (0.0, 22.5, 45.0, 67.5, 90.0)   # arah awal evaluasi (kompas: 0 = utara, 90 = timur), sama dengan Q-learning
 EVAL_REPEATS = 2            # sama dengan Q-learning (greedy + fisika deterministik: ulangan umumnya identik)
+if os.environ.get("MM_EVAL_HEADINGS"):       # mis. "0,10,20,30,40,50,60,70,80,90" (derajat kompas)
+    EVAL_HEADINGS = tuple(float(v) for v in os.environ["MM_EVAL_HEADINGS"].split(","))
+EVAL_REPEATS = int(os.environ.get("MM_EVAL_REPEATS", EVAL_REPEATS))
 IR_SCALE = 1200.0       # input IR = sqrt(ADC / IR_SCALE), dipotong ke [0, 1] (ADC >= 1200 ~ < 50 mm = 1,0)
 IR_DELTA_GAIN = 3.0     # pengali selisih IR antar keputusan (skala sebanding dengan input lain)
 
-# Lapisan pengaman (refleks hard-coded) di atas kebijakan DQN. False = DQN murni.
-SAFETY_LAYER = not PURE_DQN
+# Lapisan pengaman (refleks hard-coded) di atas kebijakan DQN. Mati pada bawaan (LAPISAN_BUATAN = False).
+SAFETY_LAYER = LAPISAN_BUATAN
 SH_FRONT = 100.0        # ADC FL/FR: rintangan di depan terdeteksi (lebih peka dari 150: bereaksi lebih awal)
 SH_DIAG = 15.0          # ADC DL/DR (sinar 45 derajat, jangkauan sensor 25 cm): 15 -> sinar ~23,6 cm -> ~13,6 cm dari sisi badan
                         # (15 cm tepat tidak mungkin: sinar harus > 25 cm). Dulu 80 = ~10 cm dari sisi badan.
@@ -116,14 +106,14 @@ A_PUTAR_KIRI, A_PUTAR_KANAN = 8, 9
 # Pemecah loop (memori): terjebak = perpindahan odometri < ESC_DIST dalam ESC_WINDOW keputusan terakhir.
 # Manuver: putar di tempat >= ESC_TURN_DEG, lalu maju lurus ESC_FORWARD keputusan (berhenti bila FL/FR terbaca).
 # ESC_WINDOW harus < STUCK_WINDOW (20) milik lingkungan, kalau tidak episode sudah berakhir 'stuck' lebih dulu.
-ESCAPE_LAYER = not PURE_DQN
+ESCAPE_LAYER = LAPISAN_BUATAN
 ESC_WINDOW, ESC_DIST = 12, 0.05
 ESC_TURN_DEG, ESC_TURN_MAX, ESC_FORWARD = 150.0, 20, 12
 SH_CORNER_MIN = 3       # sudut cekung: minimal 3 dari 4 sensor IR >= ambang (4 = harus keempatnya)
 # Ingatan sisi: DL/DR hanya melihat serong ke depan, jadi sudut rintangan yang baru lewat ke samping tak terbaca
 # lagi padahal badan masih di dekatnya. Bila DL (DR) membaca rintangan dalam SIDE_MEM keputusan terakhir
 # (~11 cm lintasan), belok ke kiri (kanan) dilarang: diganti lurus, atau belok menjauh bila depan terblokir.
-SIDE_MEMORY = not PURE_DQN
+SIDE_MEMORY = LAPISAN_BUATAN
 SIDE_MEM = 6
 LEFT_TURNS, RIGHT_TURNS = (2, 4, 6), (3, 5, 7)      # aksi 8/9 (putar di tempat, sudut cekung) tidak dibatasi
 
@@ -131,7 +121,7 @@ LEFT_TURNS, RIGHT_TURNS = (2, 4, 6), (3, 5, 7)      # aksi 8/9 (putar di tempat,
 # LOOP_WINDOW keputusan, tanpa perpindahan berarti) = terjebak orbit/kantong buntu. Aksi: menelusuri jejak
 # (jalur bersih tanpa lingkaran) mundur LOOP_BACK m, lalu zona di sekitar jebakan dilarang selama
 # TABU_STEPS keputusan (robot ditolak masuk). Titik jebakan juga dicatat sebagai titik macet (penalti zona).
-LOOP_LAYER = not PURE_DQN
+LOOP_LAYER = LAPISAN_BUATAN
 LOOP_WINDOW, LOOP_YAW, LOOP_DISP = 150, 2 * math.pi, 0.6
 LOOP_ERASE_R, LOOP_ERASE_LAG = 0.12, 20      # lingkaran dihapus dari jejak bila kembali ke titik >= LAG keputusan lalu
 LOOP_BACK, LOOP_WP, LOOP_BACK_MAX = 0.8, 0.15, 100    # panjang telusur mundur (m), jarak antar titik tuju (m), maks keputusan
@@ -444,7 +434,7 @@ def run_episode(env, agent, eps, learn, record_path=False, start_yaw=None):
             return outcome, env.n_decisions, total, path
 
 
-def evaluate(env, agent, fname="eval_result.json", meta=None):
+def eval_runs(env, agent, verbose=True, record_path=True):
     """Evaluasi greedy (epsilon 0) dari beberapa arah awal; format sama dengan Q-learning."""
     results, k = [], 0
     n = len(EVAL_HEADINGS) * EVAL_REPEATS
@@ -452,12 +442,25 @@ def evaluate(env, agent, fname="eval_result.json", meta=None):
         for _ in range(EVAL_REPEATS):
             k += 1
             outcome, steps, total, path = run_episode(
-                env, agent, 0.0, False, True, start_yaw=math.radians(90.0 - h))
+                env, agent, 0.0, False, record_path, start_yaw=math.radians(90.0 - h))
             results.append({"heading": h, "outcome": outcome, "decisions": steps,
                             "reward": round(total, 2), "sim_time": round(steps * 0.128, 1),
                             "hazard_steps": env.hazard_steps, "path": path})
-            print(f"EVAL {k}/{n}: arah={h:5.1f} {outcome:9s} decisions={steps} R={total:.1f} "
-                  f"hazard_steps={env.hazard_steps}")
+            if verbose:
+                print(f"EVAL {k}/{n}: arah={h:5.1f} {outcome:9s} decisions={steps} R={total:.1f} "
+                      f"hazard_steps={env.hazard_steps}")
+    return results
+
+
+def eval_score(results):
+    """Skor pemilihan model: lebih banyak goal lebih baik, lalu keputusan rata-rata goal lebih sedikit."""
+    goals = [r["decisions"] for r in results if r["outcome"] == "goal"]
+    return (len(goals), -(sum(goals) / len(goals)) if goals else -1e9)
+
+
+def evaluate(env, agent, fname="eval_result.json", meta=None):
+    n = len(EVAL_HEADINGS) * EVAL_REPEATS
+    results = eval_runs(env, agent)
     ok = sum(r["outcome"] == "goal" for r in results)
     by_heading = {}
     for r in results:
@@ -471,7 +474,7 @@ def evaluate(env, agent, fname="eval_result.json", meta=None):
         "success": ok, "n": n, "arena": env.arena, "target": list(lay["target"]), "start": list(env.start),
         "target_r": env.target_r, "obstacles": lay["obstacles"], "hazards": lay["hazards"],
         "headings": list(EVAL_HEADINGS), "repeats": EVAL_REPEATS, "by_heading": by_heading,
-        "pure_dqn": PURE_DQN, "gamma": GAMMA, "n_step": N_STEP, "seed": SEED, "train": meta or {},
+        "lapisan_buatan": LAPISAN_BUATAN, "gamma": GAMMA, "n_step": N_STEP, "seed": SEED, "train": meta or {},
         "episodes": results}), encoding="utf-8")
 
 
@@ -482,7 +485,7 @@ def main():
     torch.manual_seed(SEED)
     agent = DQNAgent(N_FEATURES, len(ACTIONS), rng, gamma=GAMMA, n_policy=N_POLICY_ACTIONS, n_step=N_STEP)
     print(f"continuous_dqn: seed={SEED} episodes<={EPISODES} gamma={GAMMA} n_step={N_STEP}")
-    print(f"  mode={'DQN MURNI' if PURE_DQN else 'DQN+lapisan'} pengaman={'ON' if SAFETY_LAYER else 'off'} "
+    print(f"  mode={'DQN+lapisan' if LAPISAN_BUATAN else 'DQN'} pengaman={'ON' if SAFETY_LAYER else 'off'} "
           f"pemecah_loop={'ON' if ESCAPE_LAYER else 'off'} target_known={TARGET_KNOWN}")
     print(f"  reward: r_step={R_STEP_DQN} r_goal_time={R_GOAL_TIME_DQN} "
           f"r_collision_near={R_COLLISION_NEAR_DQN} r_stuck={R_STUCK_DQN}")
@@ -490,7 +493,7 @@ def main():
     print(f"  start_heading={START_HEADING} aksi={list(ACTION_NAMES)}")
 
     if EVAL_ONLY:
-        agent.load_state_dict(torch.load(HERE / "dqn_model_best.pt")["state"])
+        agent.load_state_dict(torch.load(os.environ.get("MM_MODEL") or HERE / "dqn_model_best.pt")["state"])
         evaluate(env, agent)
         return env
 
@@ -503,7 +506,8 @@ def main():
     heading_rng = random.Random(SEED + 1)
     window = deque(maxlen=WINDOW)
     best_rate, since_best, stop, rate = -1.0, 0, "max_episodes", 0.0
-    best_sd, best_ep = None, 0
+    best_sd, best_ep = None, 0                # jaringan rate training tertinggi (cadangan)
+    sel_sd, sel_ep, sel_score, last_sel = None, 0, (-1, 0.0), -10 ** 9     # jaringan skor evaluasi terbaik
     for ep in range(1, EPISODES + 1):
         heading = heading_rng.uniform(*START_HEADING)
         outcome, steps, total, _ = run_episode(env, agent, eps, True,
@@ -526,9 +530,18 @@ def main():
             if rate > best_rate:
                 best_rate, since_best = rate, 0
                 best_sd, best_ep = agent.state_dict(), ep
-                torch.save({"state": best_sd, "rate": rate, "episode": ep}, OUT_DIR / "dqn_model.pt")
+                if not SELECT:
+                    torch.save({"state": best_sd, "rate": rate, "episode": ep}, OUT_DIR / "dqn_model.pt")
             elif eps <= EPS_MIN + 1e-12:
                 since_best += 1
+            if SELECT and rate >= SEL_MIN_RATE and (ep - last_sel >= SEL_EVERY or (EARLY_STOP and rate >= CONVERGED)):
+                last_sel = ep
+                sc = eval_score(eval_runs(env, agent, verbose=False, record_path=False))
+                print(f"SELEKSI ep {ep}: evaluasi greedy {sc[0]}/{len(EVAL_HEADINGS) * EVAL_REPEATS} goal, "
+                      f"keputusan rata-rata {-sc[1]:.0f}" + ("  <- terbaik" if sc > sel_score else ""))
+                if sc > sel_score:
+                    sel_score, sel_ep, sel_sd = sc, ep, agent.state_dict()
+                    torch.save({"state": sel_sd, "rate": rate, "episode": ep, "eval_goal": sc[0]}, OUT_DIR / "dqn_model.pt")
             if EARLY_STOP and rate >= CONVERGED:
                 stop = "converged"
                 break
@@ -542,21 +555,32 @@ def main():
     dump_hotspots(env)
     print(f"TRAINING selesai: {stop}, episode={ep}, rate_akhir={rate:.2f}, buffer={agent.size}")
     torch.save({"state": agent.state_dict(), "rate": rate, "episode": ep}, OUT_DIR / "dqn_model_last.pt")
-    if best_sd is not None:
-        print(f"Model rate tertinggi: episode {best_ep}, success rate {best_rate:.2f} (disimpan di dqn_model.pt, "
-              f"hanya pembanding)")
+    if sel_sd is not None:
+        print(f"Model terpilih (evaluasi greedy): episode {sel_ep}, {sel_score[0]}/{len(EVAL_HEADINGS) * EVAL_REPEATS} goal, "
+              f"keputusan rata-rata {-sel_score[1]:.0f} (disimpan di dqn_model.pt)")
+    elif best_sd is not None:
+        print(f"Model rate tertinggi: episode {best_ep}, success rate {best_rate:.2f} (disimpan di dqn_model.pt)")
+        if SELECT:      # tidak pernah mencapai SEL_MIN_RATE: pakai rate training tertinggi
+            torch.save({"state": best_sd, "rate": best_rate, "episode": best_ep}, OUT_DIR / "dqn_model.pt")
     else:
         torch.save({"state": agent.state_dict(), "rate": rate, "episode": ep}, OUT_DIR / "dqn_model.pt")
+    use_sd, use_ep = (sel_sd, sel_ep) if sel_sd is not None else (best_sd, best_ep)
     meta = {"stop": stop, "episodes": ep, "updates": agent.updates, "wall_seconds": round(time.time() - t_start),
-            "rate_akhir": round(rate, 3), "best_rate": round(best_rate, 3), "best_episode": best_ep}
-    print(f"Evaluasi 1: JARINGAN TERAKHIR (episode {ep}) -> eval_result.json; updates={agent.updates} "
-          f"waktu={meta['wall_seconds']} s")
+            "rate_akhir": round(rate, 3), "best_rate": round(best_rate, 3), "best_episode": best_ep,
+            "seleksi": SELECT, "model_episode": use_ep if use_sd is not None else ep,
+            "seleksi_goal": sel_score[0] if sel_sd is not None else None}
+    # Evaluasi UTAMA memakai model terpilih (skor evaluasi greedy terbaik; cadangan rate training tertinggi) -> eval_result.json.
+    # Jaringan terakhir dievaluasi juga bila berbeda (pembanding).
+    last_sd = agent.state_dict()
+    if use_sd is not None:
+        agent.load_state_dict(use_sd)
+    print(f"Evaluasi UTAMA: model episode {use_ep if use_sd is not None else ep} -> eval_result.json; "
+          f"updates={agent.updates} waktu={meta['wall_seconds']} s")
     evaluate(env, agent, "eval_result.json", meta)
-    if best_sd is not None and best_ep != ep:
-        agent.load_state_dict(best_sd)
-        print(f"Evaluasi 2: MODEL RATE TERTINGGI (episode {best_ep}) -> eval_result_rate_tertinggi.json "
-              f"(pembanding Q-learning yang memakai tabel rate tertinggi)")
-        evaluate(env, agent, "eval_result_rate_tertinggi.json", meta)
+    if use_sd is not None and use_ep != ep:
+        agent.load_state_dict(last_sd)
+        print(f"Evaluasi pembanding: jaringan terakhir (episode {ep}) -> eval_result_terakhir.json")
+        evaluate(env, agent, "eval_result_terakhir.json", meta)
     return env
 
 

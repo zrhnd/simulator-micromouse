@@ -7,7 +7,7 @@ yang didiskretkan (bin), dan itu semua ada di file ini:
 
   * ArenaEnv.observe_raw()  -> sensor/odometri mentah (desimal)
   * discretize(raw)         -> tuple bilangan bulat (kunci Q-table)
-  * ACTIONS                 -> pasangan kecepatan roda (rad/s), nilai riil
+  * ACTIONS                 -> 10 pasangan kecepatan roda (rad/s), nilai riil (dipakai bersama oleh Q-learning dan DQN)
 
 Dua mode (konstanta TARGET_KNOWN di bawah):
   * TARGET_KNOWN = False (bawaan): robot TIDAK tahu letak target maupun area bahaya.
@@ -44,16 +44,23 @@ DECISION_STEPS = 8        # satu aksi dijalankan 8 x 16 ms = 128 ms
 SETTLE_STEPS = 10
 CONTACT_MIN_Z = 0.003     # kontak di bawah ini = lantai, bukan dinding/rintangan
 
-# Aksi: (omega_kiri, omega_kanan) rad/s. Indeks 0..4 = indeks kolom Q-table.
+# Aksi: (omega_kiri, omega_kanan) rad/s. SATU-SATUNYA sumber himpunan aksi: Q-learning dan DQN memakai tabel
+# yang sama (10 aksi), sehingga perbandingannya apple to apple. Indeks = kolom Q-table = keluaran jaringan DQN.
 ACTIONS = (
-    (10.0, 10.0),    # 0 maju lurus
-    (6.0, 10.0),     # 1 maju sambil belok kiri
-    (10.0, 6.0),     # 2 maju sambil belok kanan
-    (-4.0, 4.0),     # 3 putar kiri di tempat
-    (4.0, -4.0),     # 4 putar kanan di tempat
+    (10.0, 10.0),    # 0 lurus cepat
+    (5.0, 5.0),      # 1 lurus pelan
+    (5.0, 10.0),     # 2 busur kiri landai
+    (10.0, 5.0),     # 3 busur kanan landai
+    (0.0, 10.0),     # 4 belok kiri tajam
+    (10.0, 0.0),     # 5 belok kanan tajam
+    (0.0, 5.0),      # 6 belok kiri tajam, pelan
+    (5.0, 0.0),      # 7 belok kanan tajam, pelan
+    (-5.0, 5.0),     # 8 putar kiri di tempat (roda kiri mundur, kanan maju; ~14 derajat per keputusan)
+    (5.0, -5.0),     # 9 putar kanan di tempat
 )
-ACTION_NAMES = ("lurus", "maju-kiri", "maju-kanan", "putar-kiri", "putar-kanan")
-SPIN_ACTIONS = (3, 4)     # indeks aksi yang dikenai R_SPIN (DQN menimpa ACTIONS dan SPIN_ACTIONS)
+ACTION_NAMES = ("lurus-cepat", "lurus-pelan", "kiri-landai", "kanan-landai", "kiri-tajam",
+                "kanan-tajam", "kiri-tajam-pelan", "kanan-tajam-pelan", "putar-kiri", "putar-kanan")
+SPIN_ACTIONS = (8, 9)     # indeks aksi yang dikenai R_SPIN (hanya putar di tempat)
 
 # Batas bin sensor IR (nilai ADC, makin besar makin dekat; urutan dari terdekat).
 # FL/FR (lurus ke depan), jarak moncong robot ke rintangan hasil ukur respons sensor:

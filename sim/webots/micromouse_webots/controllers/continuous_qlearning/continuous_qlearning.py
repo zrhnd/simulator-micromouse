@@ -10,16 +10,17 @@ area bahaya; state = (IR depan-kiri, IR depan-kanan, IR diagonal kiri, IR diagon
 kanan, sel posisi x, sel posisi y, arah hadap), imbalan menuju target hanya +100
 saat masuk area target, plus bonus kecil menjelajah sel baru. Dengan
 TARGET_KNOWN = True state memuat arah/jarak ke target dan zona bahaya.
-5 aksi (pasangan kecepatan roda).
+10 aksi (pasangan kecepatan roda, tabel yang sama dengan DQN: lihat ACTIONS di arena_env.py).
 
 Rumus update (sama dengan proyek micromouse):
   Q[s][a] += alpha * (r + gamma * max Q[s'] - Q[s][a])      (tanpa max di state akhir)
 
 Training berhenti bila success rate WINDOW episode terakhir >= CONVERGED, atau
 tidak membaik selama PATIENCE episode (dihitung hanya setelah epsilon mencapai
-minimum), atau EPISODES habis. Q-table dengan
-success rate WINDOW-episode tertinggi disimpan ke qtable_state.pkl (bukan
-Q-table terakhir) dan itulah yang dievaluasi greedy (epsilon 0) dari beberapa arah
+minimum), atau EPISODES habis. Pemilihan model: saat rate >= SEL_MIN_RATE, tiap
+SEL_EVERY episode dijalankan evaluasi greedy singkat; Q-table dengan skor evaluasi terbaik
+(goal terbanyak, lalu keputusan paling sedikit) disimpan ke qtable_state.pkl (bukan
+Q-table terakhir, bukan rate training) dan itulah yang dievaluasi greedy (epsilon 0) dari beberapa arah
 awal (EVAL_HEADINGS, tiap arah EVAL_REPEATS kali). Timeout diberi penalti
 (R_TIMEOUT) dan dianggap akhir episode.
 
@@ -27,11 +28,16 @@ Variabel lingkungan (semua opsional):
   MM_EPISODES   batas episode            (6000; 3000 bila TARGET_KNOWN)
   MM_SEED       seed agen                (7)
   MM_PATIENCE   episode tanpa perbaikan  (800; 400 bila TARGET_KNOWN)
+  MM_SELEKSI 0: pilih model dari rate training tertinggi (cara lama). Bawaan 1: dari evaluasi greedy.
+  MM_EARLY_STOP 0: matikan early stopping (konvergen/patience); berjalan sampai MM_EPISODES. Bawaan 1
   MM_START_HEADING  "a,b": arah awal robot ACAK per episode training, seragam di
                 antara a dan b derajat arah kompas (0 = utara, 90 = timur);
                 "world" = pakai arah robot di world. Bawaan: "0,90"
                 (START_HEADING_DEFAULT). Evaluasi akhir selalu memakai arah robot di world.
-  MM_EVAL_ONLY  1: tanpa training, muat qtable_state_best.pkl lalu evaluasi
+  MM_EVAL_ONLY  1: tanpa training, muat qtable_state_best.pkl (atau berkas MM_MODEL) lalu evaluasi
+  MM_MODEL      jalur berkas Q-table untuk MM_EVAL_ONLY; MM_EVAL_HEADINGS ("0,10,..") dan MM_EVAL_REPEATS mengatur uji evaluasi
+  MM_GAMMA      faktor diskon            (0,995, sama dengan DQN)
+  MM_OUT        folder keluaran (log, Q-table, eval); bawaan folder ini
   MICROMOUSE_QUIT 1: tutup Webots setelah selesai
 Keluaran di folder ini: episode_log.csv, qtable_state.pkl, eval_result.json (berisi juga peta untuk analisis.py).
 """
@@ -49,13 +55,24 @@ import numpy as np
 from arena_env import ACTIONS, ACTION_NAMES, TARGET_KNOWN, ArenaEnv, discretize
 
 HERE = Path(__file__).resolve().parent
-ALPHA, GAMMA = 0.3, 0.95
+OUT_DIR = Path(os.environ.get("MM_OUT") or HERE)      # folder keluaran; bawaan folder ini
+# GAMMA disamakan dengan DQN (0,995) untuk perbandingan; sebelumnya 0,95. Dapat diubah lewat MM_GAMMA.
+ALPHA, GAMMA = 0.3, float(os.environ.get("MM_GAMMA", "0.995"))
 # Mode tidak tahu target butuh eksplorasi lebih lama (imbalan jarang): epsilon turun lebih pelan.
 EPS_START, EPS_DECAY, EPS_MIN = 1.0, (0.997 if TARGET_KNOWN else 0.9985), 0.05
 WINDOW, CONVERGED = 50, 0.95
+EARLY_STOP = os.environ.get("MM_EARLY_STOP", "1") == "1"     # 0 = tanpa early stopping: berjalan sampai EPISODES habis
 # Evaluasi akhir: arah awal (derajat kompas, 0 = utara, 90 = timur) dan ulangan per arah.
 EVAL_HEADINGS = (0.0, 22.5, 45.0, 67.5, 90.0)
 EVAL_REPEATS = 2
+if os.environ.get("MM_EVAL_HEADINGS"):       # mis. "0,10,20,30,40,50,60,70,80,90" (derajat kompas)
+    EVAL_HEADINGS = tuple(float(v) for v in os.environ["MM_EVAL_HEADINGS"].split(","))
+EVAL_REPEATS = int(os.environ.get("MM_EVAL_REPEATS", EVAL_REPEATS))
+# Pemilihan model: saat rate training >= SEL_MIN_RATE, tiap SEL_EVERY episode dijalankan evaluasi greedy
+# (arah & ulangan sama dengan evaluasi akhir). Model yang dipilih = skor evaluasi terbaik (jumlah goal,
+# lalu keputusan rata-rata terkecil), BUKAN rate training (rawan kebetulan). MM_SELEKSI=0: cara lama.
+SELECT = os.environ.get("MM_SELEKSI", "1") == "1"
+SEL_MIN_RATE, SEL_EVERY = 0.9, 25
 
 EPISODES = int(os.environ.get("MM_EPISODES", "3000" if TARGET_KNOWN else "6000"))
 SEED = int(os.environ.get("MM_SEED", "7"))
@@ -115,7 +132,7 @@ def run_episode(env, agent, eps, learn, record_path=False, start_yaw=None):
             return outcome, env.n_decisions, total, path
 
 
-def evaluate(env, agent):
+def eval_runs(env, agent, verbose=True, record_path=True):
     """Evaluasi greedy (epsilon 0) dari beberapa arah awal, EVAL_REPEATS kali tiap arah."""
     results = []
     k = 0
@@ -124,12 +141,25 @@ def evaluate(env, agent):
         for _ in range(EVAL_REPEATS):
             k += 1
             outcome, steps, total, path = run_episode(
-                env, agent, 0.0, False, True, start_yaw=math.radians(90.0 - h))
+                env, agent, 0.0, False, record_path, start_yaw=math.radians(90.0 - h))
             results.append({"heading": h, "outcome": outcome, "decisions": steps,
                             "reward": round(total, 2), "sim_time": round(steps * 0.128, 1),
                             "hazard_steps": env.hazard_steps, "path": path})
-            print(f"EVAL {k}/{n}: arah={h:5.1f} {outcome:9s} decisions={steps} R={total:.1f} "
-                  f"hazard_steps={env.hazard_steps}")
+            if verbose:
+                print(f"EVAL {k}/{n}: arah={h:5.1f} {outcome:9s} decisions={steps} R={total:.1f} "
+                      f"hazard_steps={env.hazard_steps}")
+    return results
+
+
+def eval_score(results):
+    """Skor pemilihan model: lebih banyak goal lebih baik, lalu keputusan rata-rata goal lebih sedikit."""
+    goals = [r["decisions"] for r in results if r["outcome"] == "goal"]
+    return (len(goals), -(sum(goals) / len(goals)) if goals else -1e9)
+
+
+def evaluate(env, agent):
+    n = len(EVAL_HEADINGS) * EVAL_REPEATS
+    results = eval_runs(env, agent)
     ok = sum(r["outcome"] == "goal" for r in results)
     by_heading = {}
     for r in results:
@@ -139,7 +169,7 @@ def evaluate(env, agent):
         print(f"  {float(h):5.1f} deg: {sum(o == 'goal' for o in outs)}/{len(outs)} goal  {outs}")
     print(f"EVAL success: {ok}/{n}")
     lay = env.layout
-    (HERE / "eval_result.json").write_text(json.dumps({
+    (OUT_DIR / "eval_result.json").write_text(json.dumps({
         "success": ok, "n": n, "arena": env.arena, "target": list(lay["target"]), "start": list(env.start),
         "target_r": env.target_r, "obstacles": lay["obstacles"], "hazards": lay["hazards"],
         "headings": list(EVAL_HEADINGS), "repeats": EVAL_REPEATS, "by_heading": by_heading,
@@ -149,23 +179,24 @@ def evaluate(env, agent):
 def main():
     env = ArenaEnv()
     agent = QAgent(SEED)
-    print(f"continuous_qlearning: seed={SEED} episodes<={EPISODES} layout=FIXED target_known={TARGET_KNOWN} start_heading={START_HEADING if START_HEADING else 'world'} "
+    print(f"continuous_qlearning: seed={SEED} gamma={GAMMA} alpha={ALPHA} episodes<={EPISODES} layout=FIXED target_known={TARGET_KNOWN} start_heading={START_HEADING if START_HEADING else 'world'} "
           f"aksi={list(ACTION_NAMES)}")
 
     if EVAL_ONLY:
-        with open(HERE / "qtable_state_best.pkl", "rb") as f:
+        with open(os.environ.get("MM_MODEL") or HERE / "qtable_state_best.pkl", "rb") as f:
             agent.q = {k: np.array(v) for k, v in pickle.load(f)["Q"].items()}
         evaluate(env, agent)
         return env
 
-    log = open(HERE / "episode_log.csv", "w", newline="", encoding="utf-8")
+    log = open(OUT_DIR / "episode_log.csv", "w", newline="", encoding="utf-8")
     w = csv.writer(log)
     w.writerow(["episode", "epsilon", "decisions", "reward", "outcome", "hazard_steps", "sim_time", "states", "start_heading", "end_x", "end_y"])
     eps = EPS_START
     heading_rng = random.Random(SEED + 1)     # terpisah dari rng agen
     window = deque(maxlen=WINDOW)
     best_rate, since_best, stop, rate = -1.0, 0, "max_episodes", 0.0
-    best_q, best_ep = None, 0
+    best_q, best_ep = None, 0                 # model rate training tertinggi (cadangan)
+    sel_q, sel_ep, sel_score, last_sel = None, 0, (-1, 0.0), -10 ** 9     # model skor evaluasi terbaik
     for ep in range(1, EPISODES + 1):
         start_yaw, heading = None, 90.0 - math.degrees(env.layout["yaw"])    # arah kompas
         if START_HEADING:
@@ -185,26 +216,45 @@ def main():
             if rate > best_rate:
                 best_rate, since_best = rate, 0
                 best_q, best_ep = {k: v.copy() for k, v in agent.q.items()}, ep
-                with open(HERE / "qtable_state.pkl", "wb") as f:
-                    pickle.dump({"Q": {k: v.tolist() for k, v in best_q.items()},
-                                 "rate": rate, "episode": ep}, f)
+                if not SELECT:
+                    with open(OUT_DIR / "qtable_state.pkl", "wb") as f:
+                        pickle.dump({"Q": {k: v.tolist() for k, v in best_q.items()},
+                                     "rate": rate, "episode": ep}, f)
             elif eps <= EPS_MIN + 1e-12:
                 # Patience baru dihitung setelah epsilon mencapai minimum: selama masih
                 # eksplorasi, success rate yang belum naik belum berarti training macet.
                 since_best += 1
-            if rate >= CONVERGED:
+            if SELECT and rate >= SEL_MIN_RATE and (ep - last_sel >= SEL_EVERY or (EARLY_STOP and rate >= CONVERGED)):
+                last_sel = ep
+                sc = eval_score(eval_runs(env, agent, verbose=False, record_path=False))
+                print(f"SELEKSI ep {ep}: evaluasi greedy {sc[0]}/{len(EVAL_HEADINGS) * EVAL_REPEATS} goal, "
+                      f"keputusan rata-rata {-sc[1]:.0f}" + ("  <- terbaik" if sc > sel_score else ""))
+                if sc > sel_score:
+                    sel_score, sel_ep = sc, ep
+                    sel_q = {k: v.copy() for k, v in agent.q.items()}
+                    with open(OUT_DIR / "qtable_state.pkl", "wb") as f:
+                        pickle.dump({"Q": {k: v.tolist() for k, v in sel_q.items()},
+                                     "rate": rate, "episode": ep, "eval_goal": sc[0]}, f)
+            if EARLY_STOP and rate >= CONVERGED:
                 stop = "converged"
                 break
-            if since_best >= PATIENCE:
+            if EARLY_STOP and since_best >= PATIENCE:
                 stop = "patience"
                 break
     log.close()
     print(f"TRAINING selesai: {stop}, episode={ep}, rate_akhir={rate:.2f}, states={len(agent.q)}")
-    if best_q is not None:
+    if sel_q is not None:
+        agent.q = sel_q
+        print(f"Q-table terpilih (evaluasi greedy): episode {sel_ep}, {sel_score[0]}/{len(EVAL_HEADINGS) * EVAL_REPEATS} goal, "
+              f"keputusan rata-rata {-sel_score[1]:.0f} (disimpan di qtable_state.pkl)")
+    elif best_q is not None:
         agent.q = best_q
+        if SELECT:      # tidak pernah mencapai SEL_MIN_RATE: pakai rate training tertinggi
+            with open(OUT_DIR / "qtable_state.pkl", "wb") as f:
+                pickle.dump({"Q": {k: v.tolist() for k, v in best_q.items()}, "rate": best_rate, "episode": best_ep}, f)
         print(f"Q-table terbaik: episode {best_ep}, success rate {best_rate:.2f} (disimpan di qtable_state.pkl)")
     else:      # belum pernah ada jendela penuh (training sangat singkat): simpan yang terakhir
-        with open(HERE / "qtable_state.pkl", "wb") as f:
+        with open(OUT_DIR / "qtable_state.pkl", "wb") as f:
             pickle.dump({"Q": {k: v.tolist() for k, v in agent.q.items()},
                          "rate": rate, "episode": ep}, f)
     evaluate(env, agent)

@@ -1,0 +1,6 @@
+PERBANDINGAN MODEL BEST
+
+Q-learning: episode 1396, konvergen 1396, goal pertama 173, evaluasi 10/10, keputusan 253.1, jalur 3.26 m
+   peta + rintangan: 0/20 sampai target
+DQN: episode 673, konvergen 673, goal pertama 46, evaluasi 10/10, keputusan 168.3, jalur 2.78 m
+   peta + rintangan: 3/20 sampai target

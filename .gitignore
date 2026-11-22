@@ -37,9 +37,15 @@ sim/webots/**/continuous_dqn/dqn_model_last.pt
 sim/webots/**/continuous_dqn/episode_log.csv
 sim/webots/**/continuous_dqn/eval_result.json
 sim/webots/**/continuous_dqn/eval_result_rate_tertinggi.json
+sim/webots/**/continuous_dqn/eval_result_terakhir.json
 sim/webots/**/continuous_dqn/stuck_hotspots.json
 sim/webots/**/continuous_dqn/hasil_analisis/*.png
 !sim/webots/**/continuous_dqn/hasil_analisis/*_best.png
 sim/webots/**/continuous_dqn/hasil_analisis/*.gif
 !sim/webots/**/continuous_dqn/hasil_analisis/*_best.gif
 sim/webots/**/continuous_dqn/hasil_analisis/ringkasan.txt
+
+# Run multi-seed (log, model, evaluasi, grafik per seed dan perbandingan): hanya lokal, tidak ikut git.
+# Yang di-push cukup model *_best dan hasil_analisis/*_best / hasil_perbandingan_best/*_best.
+sim/webots/**/continuous_qlearning/seed/
+sim/webots/**/continuous_dqn/seed/
